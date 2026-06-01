@@ -18,6 +18,12 @@ DEVICE_DICTIONARY = {
     # Accessoires
     "VID_03C3&PID_1F10": "ZWO EAF (Electronic Automatic Focuser)",
     
+    # Externe schijfstations
+    "VID_04E8&PID_4001": "Samsung Portable SSD T7",
+
+    # Muis
+    "VID_046D&PID_C077": "Logitech USB Receiver",
+
     # USB Hubs en Controllers (Vaak ingebouwd in PC, Montering of losse Hubs)
     "VID_2109&PID_0813": "VIA Labs SuperSpeed USB 3.0 Hub",
     "VID_2109&PID_2813": "VIA Labs USB 2.0 Hub Controller",
@@ -86,10 +92,7 @@ class LogParserWorker(QThread):
         log_start_regex = re.compile(r"^-+([\d]{4}-[\d]{2}-[\d]{2}T[\d]{2}:[\d]{2}:[\d]{2})-+$")
         log_regex = re.compile(r"^([\d\-T\:\.]+)\|INFO\|.*\|(UsbDeviceWatcher_\w+)\|.*\|(.*)$")
         error_regex = re.compile(r"^([\d\-T\:\.]+)\|ERROR\|([^|]+)\|.*\|(.*)$")
-        timestamp_start_regex = re.compile(r"^[\d]{4}-[\d]{2}-[\d]{2}T[\d]{2}:[\d]{2}:[\d]{2}")
-        vid_pid_regex = re.compile(r"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})")
-        desc_regex = re.compile(r"Description:\s*([^,]+)")
-        name_regex = re.compile(r"Name:\s*([^,]+)")
+        timestamp_start_regex = re.compile(r"^[\d]{4}-[\d]{2}-[\d]{2}T[\d]{2}:[\d]{2}:[\d]{2}")        
         system_events_regex = re.compile(r"^([\d\-T\:\.]+)\|INFO\|.*\|(SystemEvents)_([^\|]+)\|.*\|(.*)$")
 
         try:
@@ -144,10 +147,7 @@ class LogParserWorker(QThread):
                             output_text += self._process_usb_event(
                                 timestamp=match.group(1),
                                 action=match.group(2),
-                                usb_info=match.group(3),
-                                vid_pid_regex=vid_pid_regex,
-                                desc_regex=desc_regex,
-                                name_regex=name_regex
+                                usb_info=match.group(3)
                             )
 
                     # SCENARIO 2: Harde ERROR (geen SequenceItem)
@@ -190,18 +190,29 @@ class LogParserWorker(QThread):
         self.finished_signal.emit()
 
 
-    def _process_usb_event(self, timestamp, action, usb_info, vid_pid_regex, desc_regex, name_regex) -> str:
-        """Verwerk een USB-apparaat regel en geef de opgemaakte tekst terug."""
+    def _process_usb_event(self, timestamp, action, usb_info) -> str:
+        """Verwerk een USB-apparaat regel en geef de opgemaakte tekst terug.
+        Args:
+            timestamp (str): Tijdstempel van de gebeurtenis.
+            action (str): De actie die plaatsvond (bijv. 'UsbDeviceAdded', 'UsbDeviceRemoved').
+            usb_info (str): De USB-informatie string.
+        Returns:
+            str: De opgemaakte tekst die aan het logboek wordt toegevoegd.
+        """
+        vid_pid_regex = re.compile(r"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})")
+        desc_regex = re.compile(r"Description:\s*([^,]+)")
+        name_regex = re.compile(r"Name:\s*([^,]+)")
+
         device_name = None
         log_found_name = None
         hardware_id = None
 
-        if "Added" in action:
-            action = "\U0001f7e2 GEPLAATST"
-        else:
+        if "Removed" in action:
             action = "\U0001f534 VERWIJDERD"
-        usb_info = action.strip()
-        
+        else:
+            action = "\U0001f7e2 GEPLAATST"
+        action = action.strip()
+
         desc_match = desc_regex.search(usb_info)
         if desc_match:
             log_found_name = desc_match.group(1).strip()
@@ -220,10 +231,11 @@ class LogParserWorker(QThread):
                 device_name = DEVICE_DICTIONARY[hardware_id]
             elif not device_name:
                 ps_name = self.lookup_device_in_windows(hardware_id)
-                if "onbekend" not in ps_name.lower():
+                print(f"ps_name: {ps_name}")
+                if "onbekend" not in ps_name.lower() and "unknown" not in ps_name.lower():
                     device_name = ps_name
 
-        if not device_name or "onbekend" in device_name.lower():
+        if not device_name or "onbekend" in device_name.lower() or "unknown" in device_name.lower():
             device_name = log_found_name if log_found_name else f"Onbekend USB-toestel ({hardware_id or 'Geen ID'})"
 
         return (
