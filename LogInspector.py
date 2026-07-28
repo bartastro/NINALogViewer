@@ -118,6 +118,12 @@ class LogParserWorker(QThread):
         timestampStartRegex = re.compile(r"^[\d]{4}-[\d]{2}-[\d]{2}T[\d]{2}:[\d]{2}:[\d]{2}")        
         systemEventsRegex = re.compile(r"^([\d\-T\:\.]+)\|INFO\|.*\|(SystemEvents)_([^\|]+)\|.*\|(.*)$")
         
+        # Regex voor DeviceUpdateTimer waarschuwingen
+        devicePollRegex = re.compile(
+            r"^([\d\-T\:\.]+)\|WARNING\|DeviceUpdateTimer\.cs\|.*?"
+            r"\|(\w+)\s+value update cycle took longer than the device poll interval "
+            r"\(Total:\s*([\d\.]+)s\s*>\s*([\d\.]+)s"
+        )
         # Regex om de exposure time uit 'Starting Exposure - Exposure Time: 120s;' op te vangen
         exposurePattern = re.compile(r"Starting Exposure - Exposure Time:\s*(?P<exp>\d+(?:\.\d+)?)s")
 
@@ -212,7 +218,19 @@ class LogParserWorker(QThread):
                                 systemEvent=match.group(3),
                                 info=match.group(4)
                             )
-                    # SCENARIO 4: ImageSave-tijden
+
+                    # SCENARIO 4: Device Poll Lag Warnings
+                    elif "DeviceUpdateTimer.cs" in cleanedLine:
+                        match = devicePollRegex.match(cleanedLine)
+                        if match:
+                            outputText += self.ProcessDevicePollWarning(
+                                timestamp=match.group(1),
+                                device=match.group(2),
+                                total_time=match.group(3),
+                                poll_interval=match.group(4)
+                            )
+                    
+                    # SCENARIO 5: ImageSave-tijden
                     elif match := imageSavePattern.match(line):
                         groups = match.groupdict()
                         
@@ -256,6 +274,13 @@ class LogParserWorker(QThread):
         self.finishedSignal.emit()
 
 
+    def ProcessDevicePollWarning(self, timestamp, device, total_time, poll_interval):
+        return (
+            f"[{timestamp}] ⚠️ DEVICE LAG\n"
+            f"📝 Context: {device} Update duurde {total_time}s (limiet: {poll_interval}s)\n"
+            f"{'-' * 80}\n"
+        )
+        
     def ProcessUSBEvent(self, timestamp, action, usbInfo) -> str:
         """Verwerk een USB-apparaat regel en geef de opgemaakte tekst terug.
         Args:
