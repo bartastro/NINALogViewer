@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import subprocess
 import tempfile
@@ -108,6 +109,7 @@ class LogParserWorker(QThread):
         before_finalize_durations = []
         finalize_durations = []
         exposure_times = []  # Nieuwe lijst voor belichtingstijden per frame
+        device_lags = [] # Bevat tuples: (timestamp_object, device_name, total_time)
         
         current_exposure_time = None  # Bijhouden van de laatst gelezen belichtingstijd
 
@@ -223,6 +225,22 @@ class LogParserWorker(QThread):
                     elif "DeviceUpdateTimer.cs" in cleanedLine:
                         match = devicePollRegex.match(cleanedLine)
                         if match:
+                            timestamp_str = match.group(1)
+                            device_name = match.group(2)
+                            total_time = float(match.group(3))
+                            poll_limit = float(match.group(4))
+        
+                            # Converteer ISO timestamp naar datetime object voor de grafiek-as
+                            try:
+                                # Captures YYYY-MM-DDTHH:MM:SS.ffff
+                                dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
+                                device_lags.append({
+                                    'datetime': dt,
+                                    'device': device_name,
+                                    'duration': total_time
+                                })
+                            except Exception:
+                                pass   
                             outputText += self.ProcessDevicePollWarning(
                                 timestamp=match.group(1),
                                 device=match.group(2),
@@ -268,7 +286,8 @@ class LogParserWorker(QThread):
             'before_save': before_save_durations,
             'before_finalize': before_finalize_durations,
             'finalize': finalize_durations,
-            'exposure_times': exposure_times  # Wordt doorgestuurd naar de plot functie
+            'exposure_times': exposure_times,
+            'device_lags': device_lags  # Wordt doorgestuurd naar de plot functie
         }
         self.dataParsedSignal.emit(save_data)
         self.finishedSignal.emit()
@@ -508,7 +527,7 @@ class MainWindow(QMainWindow):
         return text
 
     def ExportToPDF(self):
-        """Exporteert het tekstuele dashboard en de grafiek naar een Landscape PDF rapport."""
+        """Exporteert het tekstuele dashboard, de grafiek én een Device Lag tabel naar een Landscape PDF rapport."""
         if not self.file_path:
             QMessageBox.warning(self, "Waarschuwing", "Er is geen logbestand geladen.")
             return
@@ -523,7 +542,7 @@ class MainWindow(QMainWindow):
 
         temp_img_path = None
         try:
-            # 1. Probeer een TrueType font te registreren dat Unicode/symbolen ondersteunt (Windows Arial)
+            # 1. Probeer een TrueType font te registreren (Windows Arial)
             font_name = 'Helvetica' # Fallback
             try:
                 arial_path = "C:\\Windows\\Fonts\\arial.ttf"
@@ -536,11 +555,9 @@ class MainWindow(QMainWindow):
             # 2. Sla de huidige Matplotlib grafiek tijdelijk op als afbeelding
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_img:
                 temp_img_path = temp_img.name
-                # Brede resolutie voor landscape
                 self.figure.savefig(temp_img_path, format='png', dpi=200, bbox_inches='tight')
 
             # 3. Bouw het ReportLab PDF document op in LANDSCAPE
-            # Landscape A4 is 841.89 pt breed x 595.27 pt hoog
             doc = SimpleDocTemplate(
                 pdf_path,
                 pagesize=landscape(A4),
@@ -575,6 +592,14 @@ class MainWindow(QMainWindow):
                 spaceAfter=12
             )
 
+            cell_style = ParagraphStyle(
+                'TableCell',
+                parent=styles['Normal'],
+                fontName=font_name,
+                fontSize=8,
+                leading=10
+            )
+
             # A. Titel toevoegen
             log_filename = os.path.basename(self.file_path)
             story.append(Paragraph(f"<b>N.I.N.A. Log Analyse Rapport</b>", title_style))
@@ -586,10 +611,8 @@ class MainWindow(QMainWindow):
             if not raw_dashboard:
                 raw_dashboard = "Geen tekstuele resultaten beschikbaar."
 
-            # Schoon de symbolen op voor nette weergave zonder vierkantjes
             clean_dashboard = self._get_clean_pdf_text(raw_dashboard)
 
-            # Format naar HTML-breaks voor ReportLab
             formatted_text = (
                 clean_dashboard
                 .replace('&', '&amp;')
@@ -599,14 +622,72 @@ class MainWindow(QMainWindow):
             )
             story.append(Paragraph(formatted_text, text_style))
 
-            # C. Grafiek Afbeelding toevoegen (Landscape breedte: ~770 pt beschikbaar)
+            # C. Grafiek Afbeelding toevoegen
             story.append(Spacer(1, 5))
             story.append(Paragraph("<b>Opslagtijden Grafiek:</b>", styles['Heading2']))
             story.append(Spacer(1, 5))
 
-            # Afbeelding instellen op brede Landscape verhoudingen (bijv. 760 x 280 pt)
-            img = RLImage(temp_img_path, width=760, height=280)
+            # Afbeelding instellen (hoogte iets aangepast voor ruimte tabel)
+            img = RLImage(temp_img_path, width=760, height=240)
             story.append(img)
+
+            # ------------------------------------------------------------------
+            # D. OVERZICHTSTABEL: DEVICE LAGS (Informatie uit de popups)
+            # ------------------------------------------------------------------
+            data = getattr(self, 'current_data', {})
+            device_lags = data.get('device_lags', [])
+
+            if device_lags:
+                story.append(Spacer(1, 10))
+                story.append(Paragraph("<b>Gedetecteerde Device Lags (Vertragingen):</b>", styles['Heading3']))
+                story.append(Spacer(1, 4))
+
+                # Tabelkop
+                table_data = [
+                    [
+                        Paragraph("<b>Tijdstip</b>", cell_style),
+                        Paragraph("<b>Apparaat / Device</b>", cell_style),
+                        Paragraph("<b>Duurtijd (seconden)</b>", cell_style),
+                        Paragraph("<b>Status / Impact</b>", cell_style)
+                    ]
+                ]
+
+                # Rijen vullen vanuit de device_lags
+                for lag in device_lags:
+                    lag_dt = lag.get('datetime')
+                    time_str = lag_dt.strftime("%H:%M:%S") if lag_dt else "Onbekend"
+                    device = lag.get('device', 'Onbekend')
+                    duration = lag.get('duration', 0.0)
+
+                    # Status bepalen op basis van ernst
+                    if duration > 30:
+                        status_str = "<font color='crimson'><b>Ernstige vertraging</b></font>"
+                    elif duration > 10:
+                        status_str = "<font color='orange'><b>Matige vertraging</b></font>"
+                    else:
+                        status_str = "<font color='gray'>Lichte vertraging</font>"
+
+                    table_data.append([
+                        Paragraph(time_str, cell_style),
+                        Paragraph(device, cell_style),
+                        Paragraph(f"{duration:.2f} s", cell_style),
+                        Paragraph(status_str, cell_style)
+                    ])
+
+                # ReportLab Tabel aanmaken met nette kolombreedtes (Totaal 760 pt)
+                lag_table = Table(table_data, colWidths=[100, 200, 160, 300])
+                lag_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e9ecef')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1a2a3a')),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dcdcdc')),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+
+                story.append(lag_table)
 
             # 4. Genereer de PDF
             doc.build(story)
@@ -619,9 +700,10 @@ class MainWindow(QMainWindow):
             if temp_img_path and os.path.exists(temp_img_path):
                 os.remove(temp_img_path)
 
-                
+
     def PlotSaveTimes(self, data):
         """Rendert een Matplotlib grafiek van de ImageSave opslagtijden direct op het PyQt canvas."""
+        self.current_data = data
         timestamps = data.get('timestamps', [])
         if not timestamps:
             return
@@ -693,7 +775,88 @@ class MainWindow(QMainWindow):
         ax.scatter(x_indices, data['total'], color='crimson', s=15, zorder=3)
 
         # ------------------------------------------------------------------
-        # 3. OPMAAK EN ASSEN
+        # 3. OVERLAY: DEVICE LAGS (Verticale Lijnen met Hover Data)
+        # ------------------------------------------------------------------
+        device_lags = data.get('device_lags', [])
+        self.lag_lines = [] # Slaan we op voor de hover-event handler
+
+        if device_lags and timestamps:
+            def parse_to_datetime(ts_str):
+                clean_ts = ts_str.split('.')[0]
+                if 'T' in clean_ts:
+                    return datetime.strptime(clean_ts, "%Y-%m-%dT%H:%M:%S")
+                return datetime.strptime(clean_ts, "%H:%M:%S")
+
+            try:
+                first_dt = parse_to_datetime(timestamps[0])
+                frame_secs = [(parse_to_datetime(ts) - first_dt).total_seconds() for ts in timestamps]
+
+                # 1. Groepeer lags die op vrijwel hetzelfde moment plaatsvonden (binnen 2 sec)
+                grouped_lags = {}
+                for lag in device_lags:
+                    lag_dt = lag.get('datetime')
+                    if not lag_dt:
+                        continue
+                    
+                    lag_sec = (lag_dt - first_dt).total_seconds()
+                    # Rond af op 2 seconden om simultane events te groeperen
+                    bucket_key = round(lag_sec / 2.0) * 2
+
+                    if bucket_key not in grouped_lags:
+                        grouped_lags[bucket_key] = {
+                            'lag_sec': lag_sec,
+                            'time_str': lag_dt.strftime("%H:%M:%S"),
+                            'events': []
+                        }
+                    grouped_lags[bucket_key]['events'].append(lag)
+
+                # 2. Teken de gebundelde lijnen
+                max_y = max(data['total']) if data['total'] else 10
+
+                for bucket in grouped_lags.values():
+                    lag_sec = bucket['lag_sec']
+                    x_pos = np.interp(lag_sec, frame_secs, x_indices)
+
+                    # Bepaal de ergste lag in dit cluster voor de kleur-intensiteit
+                    max_duration = max(e['duration'] for e in bucket['events'])
+                    line_color = 'crimson' if max_duration > 30 else 'darkorange'
+
+                    # Teken één strakke stippellijn per tijds-cluster
+                    line = ax.axvline(
+                        x=x_pos, 
+                        color=line_color, 
+                        linestyle='-.', 
+                        linewidth=1.8, 
+                        alpha=0.85, 
+                        zorder=4,
+                        label="⚠️ Device Lag Event"
+                    )
+                    
+                    # Sla metadata op aan de lijn voor het hover-event
+                    line.lag_info = bucket
+                    self.lag_lines.append(line)
+
+            except Exception as e:
+                print(f"Fout bij het verwerken van device lags overlay: {e}")
+
+        # Optioneel: Maak een dynamische tooltip-annotatie aan (verborgen tot hover)
+        self.lag_tooltip = ax.annotate(
+            "", 
+            xy=(0, 0), 
+            xytext=(15, 15),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.9, ec="black"),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"),
+            zorder=10
+        )
+        self.lag_tooltip.set_visible(False)
+
+        # Koppel het hover-event aan de canvas (eenmalig koppelen als dat nog niet gedaan is)
+        if not hasattr(self, 'hover_cid') or self.hover_cid is None:
+            self.hover_cid = self.canvas.mpl_connect("motion_notify_event", self.OnCanvasHover)
+
+        # ------------------------------------------------------------------
+        # 4. OPMAAK EN ASSEN
         # ------------------------------------------------------------------
         max_labels = 12
         step = max(1, total_frames // max_labels)
@@ -720,7 +883,7 @@ class MainWindow(QMainWindow):
         ax.grid(True, which='major', linestyle='-', alpha=0.5)
         ax.grid(True, which='minor', linestyle=':', alpha=0.2)
 
-        # Dubbele labels in de legenda voorkomen (door axvspan ontstaan er soms dubbelen)
+        # Dubbele labels in de legenda voorkomen (door axvspan/axvline ontstaan er soms dubbelen)
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         ax.legend(by_label.values(), by_label.keys(), loc='upper left', framealpha=0.9)
@@ -728,6 +891,64 @@ class MainWindow(QMainWindow):
         self.figure.tight_layout()
         self.canvas.draw()
         self.btn_export_pdf.setEnabled(True)
+
+    def OnCanvasHover(self, event):
+        """Toont een popup-tooltip als de muis over een Device Lag lijn beweegt."""
+        if not hasattr(self, 'lag_lines') or not self.lag_lines or event.inaxes is None:
+            if hasattr(self, 'lag_tooltip') and self.lag_tooltip.get_visible():
+                self.lag_tooltip.set_visible(False)
+                self.canvas.draw_idle()
+            return
+
+        vis = False
+        ax = event.inaxes
+        x_min, x_max = ax.get_xlim()
+        x_range = x_max - x_min if x_max != x_min else 1
+
+        for line in self.lag_lines:
+            x_line = line.get_xdata()[0]
+            
+            # Controleer of de muis in de buurt van de verticale lijn is (X-afstand)
+            if event.xdata is not None and abs(event.xdata - x_line) < 0.4:
+                info = line.lag_info
+                
+                # Bouw de multiline tekst op voor het popup-venstertje
+                text_lines = [f"⚠️ Device Lag op {info['time_str']}:"]
+                for ev in info['events']:
+                    text_lines.append(f"  • {ev['device']}: {ev['duration']:.2f}s")
+
+                tooltip_text = "\n".join(text_lines)
+                self.lag_tooltip.set_text(tooltip_text)
+
+                # --------------------------------------------------------------
+                # DYNAMISCHE POSITIONERING EN LINKS-UITTELIJNING VAN TEKST
+                # --------------------------------------------------------------
+                rel_x = (x_line - x_min) / x_range
+
+                if rel_x > 0.65:
+                    offset_x = -15
+                    ha = 'right'  # Positioneert het gele kaders LINKS van de stippellijn
+                else:
+                    offset_x = 15
+                    ha = 'left'   # Positioneert het gele kader RECHTS van de stippellijn
+
+                self.lag_tooltip.set_annotation_clip(True)
+                self.lag_tooltip.xytext = (offset_x, 15)
+                self.lag_tooltip.set_ha(ha)
+                
+                # FIX: Forceer dat de regelteksten BINNEN de popup ALTIJD links worden uitgelijnd!
+                self.lag_tooltip.set_multialignment('left')
+                
+                # Positioneer de pijl/punt exact op de lijn bij de hoogte van de muis
+                self.lag_tooltip.xy = (x_line, event.ydata if event.ydata is not None else 0)
+                self.lag_tooltip.set_visible(True)
+                vis = True
+                break
+
+        if not vis and self.lag_tooltip.get_visible():
+            self.lag_tooltip.set_visible(False)
+
+        self.canvas.draw_idle()
 
 if __name__ == "__main__":
     # 1. Controleer of er al een QApplication draait
