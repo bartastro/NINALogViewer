@@ -7,13 +7,14 @@ param (
 )
 
 # --- CONFIGURATIE ---
-$NinaLogFolder     = "$env:LOCALAPPDATA\NINA\Logs"
+$NinaLogFolder = "$env:LOCALAPPDATA\NINA\Logs"
 $MaxToegestaneTijd = 25.0
-$AantalRegels      = 40
+$AantalRegels = 40
+$MaxOuderdom = 90  # in seconden
 
 # Link naar NINA-problems chat kanaal
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$envPath    = Join-Path -Path $scriptPath -ChildPath ".env-nina-groundstation"
+$envPath = Join-Path -Path $scriptPath -ChildPath ".env-nina-groundstation"
 
 if (Test-Path -Path $envPath) {
     Get-Content $envPath | ForEach-Object {
@@ -35,33 +36,44 @@ if (-not $DiscordWebhookURL) {
 # 1. Bepaal welk logbestand gelezen moet worden
 if ($LogFilePath) {
     if (Test-Path -Path $LogFilePath) {
-        $LatestLog   = Get-Item -Path $LogFilePath
+        $LatestLog = Get-Item -Path $LogFilePath
         $LogPathText = $LatestLog.FullName
         Write-Host ("Testen met opgegeven logbestand: " + $LogPathText) -ForegroundColor Cyan
-    } else {
+    }
+    else {
         Write-Error ("Opgegeven bestand niet gevonden: " + $LogFilePath)
         exit
     }
-} else {
+}
+else {
     $LatestLog = Get-ChildItem -Path $NinaLogFolder -Filter "*.log" -ErrorAction SilentlyContinue | 
-                 Sort-Object LastWriteTime -Descending | 
-                 Select-Object -First 1
+    Sort-Object LastWriteTime -Descending | 
+    Select-Object -First 1
 }
 
 if (-not $LatestLog) { Exit }
 
 # 2. Lees de laatste regels veilig uit
-$FileStream   = [System.IO.File]::Open($LatestLog.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+$FileStream = [System.IO.File]::Open($LatestLog.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
 $StreamReader = [System.IO.StreamReader]::new($FileStream)
-$AllText      = $StreamReader.ReadToEnd()
+$AllText = $StreamReader.ReadToEnd()
 $StreamReader.Close()
 $FileStream.Close()
 
-$LogLines = ($AllText -split "`r?\n") | Select-Object -Last $AantalRegels
+# Als TestMode actief is, pakken we ALLE regels in het logbestand en zetten we de max ouderdom op 1 dag.
+# Zo niet, enkel de laatste $AantalRegels en max ouderdom op 90 seconden.
+if ($TestMode) {
+    $MaxOuderdom = 86400
+    $LogLines = $AllText -split "`r?\n"
+    Write-Host ("TestMode actief: " + $LogLines.Count + " regels ingeladen uit " + $LatestLog.Name) -ForegroundColor Cyan
+}
+else {
+    $LogLines = $AllText -split "`r?\n" | Select-Object -Last $AantalRegels
+}
 
 # 3. REGEX PATTERNS
-$ImageSaveRegex   = '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?Successfully saved file at.*Duration Total: (\d+):(\d+):([\d\.]+);'
-$DeviceCycleRegex = '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?(\w+)\s+value update cycle took longer than the device poll interval \(Total: ([\d\.]+)s > ([\d\.]+)s'
+$ImageSaveRegex = '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?Successfully saved file at.*Duration Total: (\d+):(\d+):([\d\.]+);'
+$DeviceCycleRegex = '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?(\w+)\s+value update cycle took longer than the device poll interval \(Total: ([\d\.]+)s\s*>\s*([\d\.]+)s'
 
 $Nu = Get-Date
 
@@ -87,7 +99,7 @@ function Send-DiscordNotification {
         )
     }
 
-    $BodyJson  = $Payload | ConvertTo-Json -Depth 5 -Compress
+    $BodyJson = $Payload | ConvertTo-Json -Depth 5 -Compress
     $BodyBytes = [System.Text.Encoding]::UTF8.GetBytes($BodyJson)
 
     $DiscordParams = @{
@@ -106,19 +118,19 @@ function Send-DiscordNotification {
 $TargetSaveLine = $LogLines | Select-String -Pattern $ImageSaveRegex | Select-Object -Last 1
 
 if ($TargetSaveLine) {
-    $Match              = $TargetSaveLine.Matches[0]
-    $LogTimeStamp       = [datetime]::Parse($Match.Groups[1].Value)
+    $Match = $TargetSaveLine.Matches[0]
+    $LogTimeStamp = [datetime]::Parse($Match.Groups[1].Value)
     $OuderdomInSeconden = ($Nu - $LogTimeStamp).TotalSeconds
 
-    if ($TestMode -or ($OuderdomInSeconden -le 90)) {
-        $Hours                = [double]$Match.Groups[2].Value
-        $Minutes              = [double]$Match.Groups[3].Value
-        $Seconds              = [double]$Match.Groups[4].Value
+    if ($TestMode -or ($OuderdomInSeconden -le $MaxOuderdom)) {
+        $Hours = [double]$Match.Groups[2].Value
+        $Minutes = [double]$Match.Groups[3].Value
+        $Seconds = [double]$Match.Groups[4].Value
         $TotalDurationSeconds = ($Hours * 3600) + ($Minutes * 60) + $Seconds
 
         if ($TotalDurationSeconds -gt $MaxToegestaneTijd) {
             $TijdstipFormatted = $LogTimeStamp.ToString("dd-MM-yyyy HH:mm:ss")
-            $AfgerondeTijd     = [math]::Round($TotalDurationSeconds, 1)
+            $AfgerondeTijd = [math]::Round($TotalDurationSeconds, 1)
 
             $Fields = @(
                 [PSCustomObject]@{ name = "Totale Duur"; value = [string]$AfgerondeTijd + " s (Drempel: " + [string]$MaxToegestaneTijd + " s)"; inline = $true },
@@ -141,6 +153,11 @@ if ($TargetSaveLine) {
         }
     }
 }
+else {
+    if ($TestMode) { 
+        Write-Host "Geen ImageSaveRegex match gevonden in log"
+    }
+}
 
 # ==========================================
 # SCENARIO B: TRAGE DEVICE VALUE UPDATE CYCLE
@@ -148,17 +165,17 @@ if ($TargetSaveLine) {
 $TargetCycleLine = $LogLines | Select-String -Pattern $DeviceCycleRegex | Select-Object -Last 1
 
 if ($TargetCycleLine) {
-    $MatchCycle         = $TargetCycleLine.Matches[0]
-    $CycleTimeStamp     = [datetime]::Parse($MatchCycle.Groups[1].Value)
+    $MatchCycle = $TargetCycleLine.Matches[0]
+    $CycleTimeStamp = [datetime]::Parse($MatchCycle.Groups[1].Value)
     $OuderdomInSeconden = ($Nu - $CycleTimeStamp).TotalSeconds
 
-    if ($TestMode -or ($OuderdomInSeconden -le 90)) {
-        $DeviceType     = $MatchCycle.Groups[2].Value
+    if ($TestMode -or ($OuderdomInSeconden -le $MaxOuderdom)) {
+        $DeviceType = $MatchCycle.Groups[2].Value
         $TotalCycleTime = [double]$MatchCycle.Groups[3].Value
-        $PollInterval   = [double]$MatchCycle.Groups[4].Value
+        $PollInterval = [double]$MatchCycle.Groups[4].Value
 
         $TijdstipFormatted = $CycleTimeStamp.ToString("dd-MM-yyyy HH:mm:ss")
-        $AfgerondeTijd     = [math]::Round($TotalCycleTime, 1)
+        $AfgerondeTijd = [math]::Round($TotalCycleTime, 1)
 
         $Fields = @(
             [PSCustomObject]@{ name = "Apparaat"; value = [string]$DeviceType; inline = $true },
@@ -168,7 +185,7 @@ if ($TargetCycleLine) {
             [PSCustomObject]@{ name = "Systeem"; value = [string]$env:COMPUTERNAME; inline = $true }
         )
 
-        $DiscordTitle       = "N.I.N.A. Device Update Lag - " + $DeviceType
+        $DiscordTitle = "N.I.N.A. Device Update Lag - " + $DeviceType
         $DiscordDescription = "De value update cycle van **" + $DeviceType + "** duurde aanzienlijk langer dan de poll interval."
 
         $NotificationParams = @{
@@ -183,5 +200,10 @@ if ($TargetCycleLine) {
 
         $Msg = "Discord melding verstuurd voor Device Update Lag - " + $DeviceType + ": " + $AfgerondeTijd + "s"
         Write-Host $Msg -ForegroundColor Green
+    }
+}
+else {
+    if ($TestMode) { 
+        Write-Host "Geen DeviceUpdateRegex match gevonden in log"
     }
 }

@@ -1,3 +1,9 @@
 .env*
 *.zip
+*.exe
+
+dist/*
+build/*
+*.spec
+
 !.env.example
