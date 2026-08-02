@@ -17,8 +17,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, 
                              QFileDialog, QTextEdit, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QProgressBar, QMessageBox)
+                             QLabel, QProgressBar, QMessageBox, QLineEdit, QShortcut)
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QKeySequence, QColor, QTextCharFormat
 
 # --- CACHE DICTIONARY ---
 # Hierin slaan we bekende apparaten op zodat we Windows niet telkens hoeven te pollen.
@@ -44,6 +45,65 @@ DEVICE_DICTIONARY = {
     "VID_0BDA&PID_0411": "Realtek SuperSpeed USB 3.0 Hub",
     "VID_0BDA&PID_5411": "Realtek USB 3.0 Hub Controller",
 }
+
+def check_windows_power_state(iso_timestamp):
+    """
+    Checkt het Windows Systeemlogboek voor Kernel-Power Event 105
+    en selecteert de status van het event dat het dichtst bij iso_timestamp ligt.
+    """
+    try:
+        # Omzetten naar datetime object voor exacte tijdsberekening
+        clean_ts_str = iso_timestamp.split('.')[0].replace('T', ' ')
+        target_dt = datetime.strptime(clean_ts_str, "%Y-%m-%d %H:%M:%S")
+        print(f"Zoekt naar N.I.N.A. Event time {target_dt}")
+
+        # Zoek in Windows log met een strak venster van +- 3 seconden
+        ps_script = f"""
+        $time = Get-Date '{clean_ts_str}'
+        Get-WinEvent -FilterHashtable @{{
+            LogName = 'System'
+            ProviderName = 'Microsoft-Windows-Kernel-Power'
+            Id = 105
+            StartTime = $time.AddSeconds(-3)
+            EndTime = $time.AddSeconds(3)
+        }} -ErrorAction SilentlyContinue | ForEach-Object {{
+            [xml]$xml = $_.ToXml()
+            $ac = $xml.Event.EventData.Data | Where-Object {{ $_.Name -eq 'AcOnline' }} | Select-Object -ExpandProperty '#text'
+            [PSCustomObject]@{{
+                Time     = $_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+                AcOnline = ($ac -eq 'true')
+            }}
+        }} | ConvertTo-Json
+        """
+        
+        res = subprocess.run(["powershell", "-Command", ps_script], capture_output=True, text=True)
+        
+        if res.stdout.strip():
+            data = json.loads(res.stdout)
+            print(f'Windows Power state data: {data}')
+            # Zorg dat we altijd een lijst hebben om doorheen te lussen
+            events = [data] if isinstance(data, dict) else data
+            
+            # Zoek het event dat het dichtst bij target_dt ligt
+            closest_event = None
+            min_diff = float('inf')
+
+            for ev in events:
+                ev_dt = datetime.strptime(ev['Time'], "%Y-%m-%d %H:%M:%S")
+                diff = abs((ev_dt - target_dt).total_seconds())
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_event = ev
+
+            if closest_event:
+                is_ac = closest_event.get('AcOnline', False)
+                return "AC (Netspanning)" if is_ac else "BATTERIJ (Accu)"
+
+    except Exception as e:
+        print(f"Fout bij Windows Power check: {e}")
+    
+    return "Onbekend"
+
 
 class LogParserWorker(QThread):
     """Worker thread om het logbestand te lezen zonder de GUI te laten bevriezen."""
@@ -110,6 +170,7 @@ class LogParserWorker(QThread):
         finalize_durations = []
         exposure_times = []  # Nieuwe lijst voor belichtingstijden per frame
         device_lags = [] # Bevat tuples: (timestamp_object, device_name, total_time)
+        power_events = []    # Bevat power events met datetime, status & details
         
         current_exposure_time = None  # Bijhouden van de laatst gelezen belichtingstijd
 
@@ -215,11 +276,41 @@ class LogParserWorker(QThread):
                     elif "SystemEvents" in cleanedLine:
                         match = systemEventsRegex.match(cleanedLine)
                         if match:
-                            outputText += self.ProcessSystemEvent(
-                                timestamp=match.group(1),
-                                systemEvent=match.group(3),
-                                info=match.group(4)
-                            )
+                            timestamp_str = match.group(1)
+                            system_event = match.group(3)
+                            info_str = match.group(4)
+
+                            if "PowerModeChanged" in system_event:
+                                # Haal de exacte AC status (True/False) op via de verbeterde helper
+                                power_status = check_windows_power_state(timestamp_str)
+                                
+                                # Omzetten naar datetime object voor de grafiek-as
+                                try:
+                                    dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
+                                    power_events.append({
+                                        'datetime': dt,
+                                        'timestamp_str': timestamp_str,
+                                        'status': power_status,
+                                        'is_ac': "AC" in power_status,
+                                        'info': info_str
+                                    })
+                                except Exception:
+                                    pass
+
+                                # Tekstweergave voor het logscherm
+                                icon = "🔌" if "AC" in power_status else "🔋"
+                                outputText += (
+                                    f"\n{'=' * 66}\n"
+                                    f"{icon} STROOM EVENT GEFAVANGE: {timestamp_str}\n"
+                                    f"   Status: {power_status}\n"
+                                    f"{'=' * 66}\n\n"
+                                )
+                            else:
+                                outputText += self.ProcessSystemEvent(
+                                    timestamp=timestamp_str,
+                                    systemEvent=system_event,
+                                    info=info_str
+                                )
 
                     # SCENARIO 4: Device Poll Lag Warnings
                     elif "DeviceUpdateTimer.cs" in cleanedLine:
@@ -287,7 +378,8 @@ class LogParserWorker(QThread):
             'before_finalize': before_finalize_durations,
             'finalize': finalize_durations,
             'exposure_times': exposure_times,
-            'device_lags': device_lags  # Wordt doorgestuurd naar de plot functie
+            'device_lags': device_lags,
+            'power_events': power_events
         }
         self.dataParsedSignal.emit(save_data)
         self.finishedSignal.emit()
@@ -448,6 +540,33 @@ class MainWindow(QMainWindow):
         self.text_edit.setReadOnly(True)
         self.text_edit.setPlaceholderText("De resultaten verschijnen hier...")
 
+        # --- NIEUW: Zoekbalk UI ---
+        self.search_widget = QWidget()
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(0, 0, 0, 0) # Maak het lekker compact
+        
+        self.search_input = QLineEdit(self)
+        self.search_input.setPlaceholderText("Zoeken...")
+        self.search_input.returnPressed.connect(self.search_text) # Zoek bij 'Enter'
+        
+        self.btn_search_next = QPushButton("Volgende", self)
+        self.btn_search_next.clicked.connect(self.search_text)
+        
+        self.btn_close_search = QPushButton("X", self)
+        self.btn_close_search.setMaximumWidth(30)
+        self.btn_close_search.clicked.connect(self.hide_search_bar)
+        
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.btn_search_next)
+        search_layout.addWidget(self.btn_close_search)
+        self.search_widget.setLayout(search_layout)
+        
+        self.search_widget.hide() # Verberg de zoekbalk bij opstarten
+
+        # --- NIEUW: Ctrl+F Sneltoets ---
+        self.shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.shortcut_search.activated.connect(self.show_search_bar)
+
         # 2. Matplotlib Canvas & Figure hier ÉÉN KEER aanmaken
         self.figure = Figure(figsize=(10, 5), dpi=100)
         self.canvas = FigureCanvas(self.figure)
@@ -471,6 +590,58 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
+    def show_search_bar(self):
+        """Toont de zoekbalk en zet de cursor meteen in het tekstvak."""
+        self.search_widget.show()
+        self.search_input.setFocus()
+        self.search_input.selectAll() # Selecteer bestaande tekst voor snelle nieuwe zoekopdracht
+
+    def hide_search_bar(self):
+        """Verbergt de zoekbalk en wist de gele markeringen."""
+        self.search_widget.hide()
+        self.text_edit.setExtraSelections([])
+
+    def search_text(self):
+        """Zoekt naar tekst, scrolt er naartoe en markeert de tekst felgeel."""
+        query = self.search_input.text()
+        
+        if not query:
+            self.text_edit.setExtraSelections([])
+            return
+
+        # 1. Zoek het volgende resultaat vanaf de huidige cursor
+        found = self.text_edit.find(query)
+
+        # Als er niets meer is gevonden, spring terug naar de start (loop)
+        if not found:
+            cursor = self.text_edit.textCursor()
+            cursor.movePosition(cursor.Start)
+            self.text_edit.setTextCursor(cursor)
+            found = self.text_edit.find(query)
+
+        if found:
+            # 2. Pak de huidige geselecteerde tekst (de actieve match)
+            current_cursor = self.text_edit.textCursor()
+
+            # Maak het markeerstift-formaat
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor("#FFE600"))  # Fel geel
+            fmt.setForeground(QColor("black"))    # Zwarte letters voor scherp contrast
+
+            # Maak een ExtraSelection aan
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = current_cursor
+            selection.format = fmt
+
+            # 3. Pas de markering toe
+            self.text_edit.setExtraSelections([selection])
+
+            # CRUCIAL STEP: Verwijder de standaard blauwe/grijze systeem-selectie 
+            # zodat alleen onze felgele ExtraSelection zichtbaar blijft!
+            clear_cursor = self.text_edit.textCursor()
+            clear_cursor.clearSelection()
+            self.text_edit.setTextCursor(clear_cursor)
 
     def OpenFileDialog(self):
         # Start automatisch in de standaard NINA log-map
@@ -724,20 +895,15 @@ class MainWindow(QMainWindow):
         valid_exps = [e for e in exposure_times if e is not None]
 
         if valid_exps:
-            # Telt het aantal subs per belichtingstijd (bijv. {60: 10, 300: 24})
             exp_counts = {}
             for exp in valid_exps:
                 exp_counts[exp] = exp_counts.get(exp, 0) + 1
 
-            # Unieke tijden gesorteerd
             unique_exps = sorted(list(exp_counts.keys()))
-            
-            # Kleurenschema instellen
             cmap = plt.get_cmap('Pastel1')
             colors = [cmap(i) for i in np.linspace(0, 1, max(len(unique_exps), 3))]
             exp_color_map = {exp: colors[i] for i, exp in enumerate(unique_exps)}
 
-            # Groepeer opeenvolgende frames met dezelfde belichtingstijd
             start_idx = 0
             current_exp = exposure_times[0]
 
@@ -746,8 +912,6 @@ class MainWindow(QMainWindow):
                     if current_exp is not None and current_exp in exp_counts:
                         color = exp_color_map[current_exp]
                         count = exp_counts[current_exp]
-                        
-                        # Label met aantal subs tussen haakjes
                         label_text = f"Exposure: {current_exp:.0f}s ({count} {'sub' if count == 1 else 'subs'})"
 
                         ax.axvspan(
@@ -771,27 +935,26 @@ class MainWindow(QMainWindow):
         ax.plot(x_indices, data['before_finalize'], label='Before Finalize', color='royalblue', linestyle='--', zorder=2)
         ax.plot(x_indices, data['finalize'], label='Finalize Save Time', color='forestgreen', linestyle=':', zorder=2)
 
-        # Optioneel: geef elk datapunt een marker
         ax.scatter(x_indices, data['total'], color='crimson', s=15, zorder=3)
+
+        # Helper functie voor tijdsomzetting (hergebruikt door lags en power events)
+        def parse_to_datetime(ts_str):
+            clean_ts = ts_str.split('.')[0]
+            if 'T' in clean_ts:
+                return datetime.strptime(clean_ts, "%Y-%m-%dT%H:%M:%S")
+            return datetime.strptime(clean_ts, "%H:%M:%S")
+
+        first_dt = parse_to_datetime(timestamps[0]) if timestamps else None
+        frame_secs = [(parse_to_datetime(ts) - first_dt).total_seconds() for ts in timestamps] if first_dt else []
 
         # ------------------------------------------------------------------
         # 3. OVERLAY: DEVICE LAGS (Verticale Lijnen met Hover Data)
         # ------------------------------------------------------------------
         device_lags = data.get('device_lags', [])
-        self.lag_lines = [] # Slaan we op voor de hover-event handler
+        self.lag_lines = []
 
         if device_lags and timestamps:
-            def parse_to_datetime(ts_str):
-                clean_ts = ts_str.split('.')[0]
-                if 'T' in clean_ts:
-                    return datetime.strptime(clean_ts, "%Y-%m-%dT%H:%M:%S")
-                return datetime.strptime(clean_ts, "%H:%M:%S")
-
             try:
-                first_dt = parse_to_datetime(timestamps[0])
-                frame_secs = [(parse_to_datetime(ts) - first_dt).total_seconds() for ts in timestamps]
-
-                # 1. Groepeer lags die op vrijwel hetzelfde moment plaatsvonden (binnen 2 sec)
                 grouped_lags = {}
                 for lag in device_lags:
                     lag_dt = lag.get('datetime')
@@ -799,7 +962,6 @@ class MainWindow(QMainWindow):
                         continue
                     
                     lag_sec = (lag_dt - first_dt).total_seconds()
-                    # Rond af op 2 seconden om simultane events te groeperen
                     bucket_key = round(lag_sec / 2.0) * 2
 
                     if bucket_key not in grouped_lags:
@@ -810,18 +972,13 @@ class MainWindow(QMainWindow):
                         }
                     grouped_lags[bucket_key]['events'].append(lag)
 
-                # 2. Teken de gebundelde lijnen
-                max_y = max(data['total']) if data['total'] else 10
-
                 for bucket in grouped_lags.values():
                     lag_sec = bucket['lag_sec']
                     x_pos = np.interp(lag_sec, frame_secs, x_indices)
 
-                    # Bepaal de ergste lag in dit cluster voor de kleur-intensiteit
                     max_duration = max(e['duration'] for e in bucket['events'])
                     line_color = 'crimson' if max_duration > 30 else 'darkorange'
 
-                    # Teken één strakke stippellijn per tijds-cluster
                     line = ax.axvline(
                         x=x_pos, 
                         color=line_color, 
@@ -832,14 +989,50 @@ class MainWindow(QMainWindow):
                         label="⚠️ Device Lag Event"
                     )
                     
-                    # Sla metadata op aan de lijn voor het hover-event
                     line.lag_info = bucket
                     self.lag_lines.append(line)
 
             except Exception as e:
                 print(f"Fout bij het verwerken van device lags overlay: {e}")
 
-        # Optioneel: Maak een dynamische tooltip-annotatie aan (verborgen tot hover)
+        # ------------------------------------------------------------------
+        # 3b. OVERLAY: POWER EVENTS (Verticale Lijnen voor AC / BATTERIJ)
+        # ------------------------------------------------------------------
+        power_events = data.get('power_events', [])
+        self.power_lines = []
+
+        if power_events and timestamps:
+            try:
+                for p_event in power_events:
+                    p_dt = p_event.get('datetime')
+                    if not p_dt:
+                        continue
+
+                    p_sec = (p_dt - first_dt).total_seconds()
+                    x_pos = np.interp(p_sec, frame_secs, x_indices)
+
+                    is_ac = p_event.get('is_ac', False)
+                    line_color = '#00BFFF' if is_ac else '#FF00FF'  # Cyaan voor AC, Magenta voor Batterij
+                    label_tag = "🔌 Stroom: AC (Netspanning)" if is_ac else "🔋 Stroom: Batterij"
+
+                    line = ax.axvline(
+                        x=x_pos, 
+                        color=line_color, 
+                        linestyle='--', 
+                        linewidth=2.0, 
+                        alpha=0.9, 
+                        zorder=5,
+                        label=label_tag
+                    )
+                    
+                    # Sla het event op aan de lijn voor het pop-up venster bij een klik
+                    line.power_info = p_event
+                    self.power_lines.append(line)
+
+            except Exception as e:
+                print(f"Fout bij het verwerken van power events overlay: {e}")
+
+        # Optioneel: dynamic tooltip-annotatie (verborgen tot hover)
         self.lag_tooltip = ax.annotate(
             "", 
             xy=(0, 0), 
@@ -851,9 +1044,12 @@ class MainWindow(QMainWindow):
         )
         self.lag_tooltip.set_visible(False)
 
-        # Koppel het hover-event aan de canvas (eenmalig koppelen als dat nog niet gedaan is)
+        # Koppel hover en klik events aan de canvas
         if not hasattr(self, 'hover_cid') or self.hover_cid is None:
             self.hover_cid = self.canvas.mpl_connect("motion_notify_event", self.OnCanvasHover)
+        
+        if not hasattr(self, 'click_cid') or self.click_cid is None:
+            self.click_cid = self.canvas.mpl_connect("button_press_event", self.OnCanvasClick)
 
         # ------------------------------------------------------------------
         # 4. OPMAAK EN ASSEN
@@ -867,10 +1063,8 @@ class MainWindow(QMainWindow):
         ax.set_xticklabels(major_labels, rotation=45, ha='right')
         ax.set_xticks(x_indices, minor=True)
 
-        # Bepaal de bestandsnaam van het geopende logbestand
         file_name = os.path.basename(self.file_path) if self.file_path else "Onbekend bestand"
 
-        # Hoofdtitel + Subtitel met bestandsnaam
         ax.set_title(
             f"N.I.N.A. Image Save Durations per Frame ({total_frames} subs)\n"
             f"Logbestand: {file_name}",
@@ -883,7 +1077,6 @@ class MainWindow(QMainWindow):
         ax.grid(True, which='major', linestyle='-', alpha=0.5)
         ax.grid(True, which='minor', linestyle=':', alpha=0.2)
 
-        # Dubbele labels in de legenda voorkomen (door axvspan/axvline ontstaan er soms dubbelen)
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         ax.legend(by_label.values(), by_label.keys(), loc='upper left', framealpha=0.9)
@@ -949,6 +1142,48 @@ class MainWindow(QMainWindow):
             self.lag_tooltip.set_visible(False)
 
         self.canvas.draw_idle()
+
+    def OnCanvasClick(self, event):
+        """Toont een PyQt pop-up venster wanneer er op een stroomlijn (power event) geklikt wordt."""
+        if event.inaxes is None or not hasattr(self, 'power_lines'):
+            return
+
+        click_x = event.xdata
+        if click_x is None:
+            return
+
+        # Zoek of er een stroomlijn in de buurt van de muisklik staat (tolerantie van 0.5 frame op X-as)
+        for line in self.power_lines:
+            line_x = line.get_xdata()[0]
+            if abs(click_x - line_x) < 0.5:
+                p_info = getattr(line, 'power_info', None)
+                if not p_info:
+                    continue
+
+                ts = p_info.get('timestamp_str', 'Onbekend')
+                status = p_info.get('status', 'Onbekend')
+                is_ac = p_info.get('is_ac', False)
+
+                # Stel de pop-up in
+                msg = QMessageBox(self)
+                if is_ac:
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setWindowTitle("🔌 Stroom Event: AC Netspanning")
+                    status_text = "<font color='green'><b>Netspanning Hersteld (AC)</b></font>"
+                else:
+                    msg.setIcon(QMessageBox.Warning)
+                    msg.setWindowTitle("🔋 Stroom Event: Batterij")
+                    status_text = "<font color='red'><b>Netspanning Weggevallen (Accu)</b></font>"
+
+                msg.setText(f"<h3>Stroomvoorziening Gewijzigd</h3>")
+                msg.setInformativeText(
+                    f"<b>Tijdstip:</b> {ts}<br>"
+                    f"<b>Status:</b> {status_text}<br>"
+                    f"<b>Windows Verificatie:</b> {status}"
+                )
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
+                break
 
 if __name__ == "__main__":
     # 1. Controleer of er al een QApplication draait
