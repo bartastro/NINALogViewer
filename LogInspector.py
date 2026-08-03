@@ -7,6 +7,7 @@ import sys
 import re
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4, landscape
@@ -17,9 +18,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, 
                              QFileDialog, QTextEdit, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QProgressBar, QMessageBox, QLineEdit, QShortcut)
+                             QLabel, QProgressBar, QMessageBox, QLineEdit, QShortcut,
+                             QCheckBox)
 from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QColor, QTextCharFormat
+from PyQt5.QtGui import QKeySequence, QColor, QTextCharFormat, QTextDocument
 
 # --- CACHE DICTIONARY ---
 # Hierin slaan we bekende apparaten op zodat we Windows niet telkens hoeven te pollen.
@@ -281,10 +283,9 @@ class LogParserWorker(QThread):
                             info_str = match.group(4)
 
                             if "PowerModeChanged" in system_event:
-                                # Haal de exacte AC status (True/False) op via de verbeterde helper
                                 power_status = check_windows_power_state(timestamp_str)
                                 
-                                # Omzetten naar datetime object voor de grafiek-as
+                                # 1. Bewaar data voor de grafiek overlay (Matplotlib)
                                 try:
                                     dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
                                     power_events.append({
@@ -297,20 +298,12 @@ class LogParserWorker(QThread):
                                 except Exception:
                                     pass
 
-                                # Tekstweergave voor het logscherm
-                                icon = "🔌" if "AC" in power_status else "🔋"
-                                outputText += (
-                                    f"\n{'=' * 66}\n"
-                                    f"{icon} STROOM EVENT GEFAVANGE: {timestamp_str}\n"
-                                    f"   Status: {power_status}\n"
-                                    f"{'=' * 66}\n\n"
-                                )
-                            else:
-                                outputText += self.ProcessSystemEvent(
-                                    timestamp=timestamp_str,
-                                    systemEvent=system_event,
-                                    info=info_str
-                                )
+                            # 2. Logtekst altijd via ProcessSystemEvent opbouwen (100% uniforme stijl)
+                            outputText += self.ProcessSystemEvent(
+                                timestamp=timestamp_str,
+                                systemEvent=system_event,
+                                info=info_str
+                            )
 
                     # SCENARIO 4: Device Poll Lag Warnings
                     elif "DeviceUpdateTimer.cs" in cleanedLine:
@@ -450,9 +443,23 @@ class LogParserWorker(QThread):
     def ProcessSystemEvent(self, timestamp, systemEvent, info) -> str:
         """Verwerk een SystemEvents-regel en geef de opgemaakte tekst terug."""
         
+        if "PowerModeChanged" in systemEvent:
+            # Controleer de status via de Windows API helper
+            power_status = check_windows_power_state(timestamp)
+            is_ac = "AC" in power_status
+            status_text = "AC Netspanning (Hersteld)" if is_ac else "Batterij / Accu (Netspanning weggevallen)"
+
+            return (
+                f"[{timestamp}] System Event ({systemEvent})\n"
+                f"⚡ Status: {status_text} | Windows Status: {power_status}\n"
+                f"📋 Details: {info}\n"
+                + "-" * 80 + "\n"
+            )
+        
+        # Standaard weergave voor overige system events
         return (
             f"[{timestamp}] System Event ({systemEvent})\n"
-            f"\U0001f525 Details: {info}\n"
+            f"🔥 Details: {info}\n"
             + "-" * 80 + "\n"
         )
 
@@ -540,50 +547,67 @@ class MainWindow(QMainWindow):
         self.text_edit.setReadOnly(True)
         self.text_edit.setPlaceholderText("De resultaten verschijnen hier...")
 
-        # --- NIEUW: Zoekbalk UI ---
+        # --- Zoekbalk UI (Embedded Widget) ---
         self.search_widget = QWidget()
         search_layout = QHBoxLayout()
-        search_layout.setContentsMargins(0, 0, 0, 0) # Maak het lekker compact
-        
+        search_layout.setContentsMargins(5, 2, 5, 2)  # Lekker compact
+        search_layout.setSpacing(5)
+
+        self.search_label = QLabel("Zoeken:", self)
         self.search_input = QLineEdit(self)
-        self.search_input.setPlaceholderText("Zoeken...")
-        self.search_input.returnPressed.connect(self.search_text) # Zoek bij 'Enter'
+        self.search_input.setPlaceholderText("Typ zoektekst...")
+        self.search_input.returnPressed.connect(self.search_text)  # Zoek bij 'Enter'
         
         self.btn_search_next = QPushButton("Volgende", self)
         self.btn_search_next.clicked.connect(self.search_text)
+
+        self.btn_search_prev = QPushButton("Vorige", self)
+        self.btn_search_prev.clicked.connect(self.search_text_previous)
         
-        self.btn_close_search = QPushButton("X", self)
+        self.btn_close_search = QPushButton("✕", self)
         self.btn_close_search.setMaximumWidth(30)
         self.btn_close_search.clicked.connect(self.hide_search_bar)
         
+        search_layout.addWidget(self.search_label)
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(self.btn_search_next)
+        search_layout.addWidget(self.btn_search_prev)
         search_layout.addWidget(self.btn_close_search)
         self.search_widget.setLayout(search_layout)
         
-        self.search_widget.hide() # Verberg de zoekbalk bij opstarten
+        self.search_widget.hide()  # Standaard verborgen bij opstarten
 
-        # --- NIEUW: Ctrl+F Sneltoets ---
+        # --- Ctrl+F Sneltoets ---
         self.shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
-        self.shortcut_search.activated.connect(self.show_search_bar)
+        self.shortcut_search.activated.connect(self.toggle_search_bar)
 
         # 2. Matplotlib Canvas & Figure hier ÉÉN KEER aanmaken
         self.figure = Figure(figsize=(10, 5), dpi=100)
         self.canvas = FigureCanvas(self.figure)
 
-        # 3. Knoppenbalk bovenaan
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        
+        # Koppel de muis-hover gebeurtenis op het canvas voor de live loep
+        self.canvas.mpl_connect('motion_notify_event', self.OnCanvasHover)
+
+        # 3. Knoppenbalk bovenaan (inclusief Loep Checkbox)
         top_layout = QHBoxLayout()
         top_layout.addWidget(self.label)
         top_layout.addWidget(self.btn_open)
         top_layout.addWidget(self.btn_export_pdf)
-        
+        top_layout.addStretch()  # Houdt de knoppen netjes links uitgelijnd
+
         # 4. Hoofd layout opbouwen
         main_layout = QVBoxLayout()
         main_layout.addLayout(top_layout)
         main_layout.addWidget(self.progress_bar)
+        
+        # Zoekbalk direct boven de text_edit plaatsen
+        main_layout.addWidget(self.search_widget)
         main_layout.addWidget(self.text_edit)
         
         # Voeg het canvas toe aan de hoofdlayout (onder het tekstvak)
+        main_layout.addWidget(self.toolbar)
         main_layout.addWidget(self.canvas)
 
         # 5. EENMALIG de centrale widget instellen
@@ -591,57 +615,123 @@ class MainWindow(QMainWindow):
         container.setLayout(main_layout)
         self.setCentralWidget(container)
 
+    def InitLoupeAxes(self, ax):
+        """Maakt een inset-axes aan die dienst doet als de loep-lens."""
+        # Maak een sub-axes aan de rechterbovenhoek (of zwevend)
+        # [left, bottom, width, height] in relatieve coördinaten van de hoofd-axes (0 tot 1)
+        self.ax_loupe = ax.inset_axes([0.65, 0.55, 0.32, 0.40])
+        self.ax_loupe.set_title("🔍 Loep (Zoom)", fontsize=8, fontweight='bold')
+        self.ax_loupe.grid(True, linestyle=':', alpha=0.6)
+        self.ax_loupe.set_visible(False)
+
+    def toggle_search_bar(self):
+        """Schakelt de zoekbalk in of uit bij het indrukken van Ctrl+F."""
+        if self.search_widget.isVisible():
+            self.hide_search_bar()
+        else:
+            self.show_search_bar()
+
     def show_search_bar(self):
-        """Toont de zoekbalk en zet de cursor meteen in het tekstvak."""
+        """Toont de zoekbalk en zet de focus direct in het invoerveld."""
         self.search_widget.show()
         self.search_input.setFocus()
-        self.search_input.selectAll() # Selecteer bestaande tekst voor snelle nieuwe zoekopdracht
+        self.search_input.selectAll()
 
     def hide_search_bar(self):
-        """Verbergt de zoekbalk en wist de gele markeringen."""
+        """Verbergt de zoekbalk en wist de gele markering in het tekstvak."""
         self.search_widget.hide()
+        # Wis de felgele markeringen
         self.text_edit.setExtraSelections([])
+        self.text_edit.setFocus()
 
     def search_text(self):
-        """Zoekt naar tekst, scrolt er naartoe en markeert de tekst felgeel."""
+        """Zoekt voorwaarts naar tekst, scrolt er naartoe en markeert de tekst felgeel."""
         query = self.search_input.text()
         
         if not query:
             self.text_edit.setExtraSelections([])
             return
 
-        # 1. Zoek het volgende resultaat vanaf de huidige cursor
-        found = self.text_edit.find(query)
+        # Start vanaf de huidige positie (of net na een actieve match)
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            start_pos = cursor.selectionEnd()
+        else:
+            start_pos = cursor.position()
 
-        # Als er niets meer is gevonden, spring terug naar de start (loop)
-        if not found:
-            cursor = self.text_edit.textCursor()
-            cursor.movePosition(cursor.Start)
-            self.text_edit.setTextCursor(cursor)
-            found = self.text_edit.find(query)
+        document = self.text_edit.document()
+        # Zoek voorwaarts vanaf de startpositie
+        found_cursor = document.find(query, start_pos)
 
-        if found:
-            # 2. Pak de huidige geselecteerde tekst (de actieve match)
-            current_cursor = self.text_edit.textCursor()
+        # Wrap-around: Als er niets is gevonden, zoek vanaf het begin (positie 0)
+        if found_cursor.isNull():
+            found_cursor = document.find(query, 0)
 
-            # Maak het markeerstift-formaat
+        # Als er een resultaat is gevonden:
+        if not found_cursor.isNull():
+            # 1. Maak het felgele markeer-formaat aan
             fmt = QTextCharFormat()
             fmt.setBackground(QColor("#FFE600"))  # Fel geel
-            fmt.setForeground(QColor("black"))    # Zwarte letters voor scherp contrast
+            fmt.setForeground(QColor("black"))    # Zwarte letters voor contrast
 
-            # Maak een ExtraSelection aan
             selection = QTextEdit.ExtraSelection()
-            selection.cursor = current_cursor
+            selection.cursor = found_cursor
             selection.format = fmt
 
-            # 3. Pas de markering toe
+            # 2. Pas de felgele markering toe
             self.text_edit.setExtraSelections([selection])
 
-            # CRUCIAL STEP: Verwijder de standaard blauwe/grijze systeem-selectie 
-            # zodat alleen onze felgele ExtraSelection zichtbaar blijft!
-            clear_cursor = self.text_edit.textCursor()
-            clear_cursor.clearSelection()
-            self.text_edit.setTextCursor(clear_cursor)
+            # 3. Zorg dat het scherm automatisch naar de match scrolt
+            # We zetten de weergave-cursor op het begin van de vondst (zonder blauwe selectie)
+            scroll_cursor = document.find(query, found_cursor.selectionStart())
+            scroll_cursor.clearSelection()
+            self.text_edit.setTextCursor(scroll_cursor)
+            self.text_edit.ensureCursorVisible()
+        else:
+            # Niets gevonden: wis bestaande markeringen
+            self.text_edit.setExtraSelections([])
+
+
+    def search_text_previous(self):
+        """Zoekt achterwaarts naar tekst met dezelfde felgele markering."""
+        query = self.search_input.text()
+        
+        if not query:
+            self.text_edit.setExtraSelections([])
+            return
+
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            start_pos = cursor.selectionStart()
+        else:
+            start_pos = cursor.position()
+
+        document = self.text_edit.document()
+        # Zoek achterwaarts vanaf de huidige positie
+        found_cursor = document.find(query, start_pos, QTextDocument.FindBackward)
+
+        # Wrap-around: Als er niets is gevonden, zoek vanaf het einde van het document
+        if found_cursor.isNull():
+            found_cursor = document.find(query, document.characterCount(), QTextDocument.FindBackward)
+
+        if not found_cursor.isNull():
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor("#FFE600"))
+            fmt.setForeground(QColor("black"))
+
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = found_cursor
+            selection.format = fmt
+
+            self.text_edit.setExtraSelections([selection])
+
+            # Zorg voor scrollen en opheffen van standaard selectie
+            scroll_cursor = document.find(query, found_cursor.selectionStart())
+            scroll_cursor.clearSelection()
+            self.text_edit.setTextCursor(scroll_cursor)
+            self.text_edit.ensureCursorVisible()
+        else:
+            self.text_edit.setExtraSelections([])
 
     def OpenFileDialog(self):
         # Start automatisch in de standaard NINA log-map
@@ -1013,7 +1103,7 @@ class MainWindow(QMainWindow):
 
                     is_ac = p_event.get('is_ac', False)
                     line_color = '#00BFFF' if is_ac else '#FF00FF'  # Cyaan voor AC, Magenta voor Batterij
-                    label_tag = "🔌 Stroom: AC (Netspanning)" if is_ac else "🔋 Stroom: Batterij"
+                    label_tag = "Stroom: AC (Netspanning)" if is_ac else "Stroom: Batterij"
 
                     line = ax.axvline(
                         x=x_pos, 
@@ -1101,11 +1191,12 @@ class MainWindow(QMainWindow):
         for line in self.lag_lines:
             x_line = line.get_xdata()[0]
             
-            # Controleer of de muis in de buurt van de verticale lijn is (X-afstand)
+            # Controleer of de muis in de buurt van de verticale lijn is (X-afstand < 0.4)
             if event.xdata is not None and abs(event.xdata - x_line) < 0.4:
-                info = line.lag_info
+                info = getattr(line, 'lag_info', None)
+                if not info:
+                    continue
                 
-                # Bouw de multiline tekst op voor het popup-venstertje
                 text_lines = [f"⚠️ Device Lag op {info['time_str']}:"]
                 for ev in info['events']:
                     text_lines.append(f"  • {ev['device']}: {ev['duration']:.2f}s")
@@ -1113,32 +1204,26 @@ class MainWindow(QMainWindow):
                 tooltip_text = "\n".join(text_lines)
                 self.lag_tooltip.set_text(tooltip_text)
 
-                # --------------------------------------------------------------
-                # DYNAMISCHE POSITIONERING EN LINKS-UITTELIJNING VAN TEKST
-                # --------------------------------------------------------------
                 rel_x = (x_line - x_min) / x_range
 
                 if rel_x > 0.65:
                     offset_x = -15
-                    ha = 'right'  # Positioneert het gele kaders LINKS van de stippellijn
+                    ha = 'right'
                 else:
                     offset_x = 15
-                    ha = 'left'   # Positioneert het gele kader RECHTS van de stippellijn
+                    ha = 'left'
 
                 self.lag_tooltip.set_annotation_clip(True)
                 self.lag_tooltip.xytext = (offset_x, 15)
                 self.lag_tooltip.set_ha(ha)
-                
-                # FIX: Forceer dat de regelteksten BINNEN de popup ALTIJD links worden uitgelijnd!
                 self.lag_tooltip.set_multialignment('left')
                 
-                # Positioneer de pijl/punt exact op de lijn bij de hoogte van de muis
                 self.lag_tooltip.xy = (x_line, event.ydata if event.ydata is not None else 0)
                 self.lag_tooltip.set_visible(True)
                 vis = True
                 break
 
-        if not vis and self.lag_tooltip.get_visible():
+        if not vis and hasattr(self, 'lag_tooltip') and self.lag_tooltip.get_visible():
             self.lag_tooltip.set_visible(False)
 
         self.canvas.draw_idle()
