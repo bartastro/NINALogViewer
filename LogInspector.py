@@ -6,6 +6,7 @@ import json
 import sys
 import re
 import numpy as np
+import traceback
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -18,10 +19,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, 
                              QFileDialog, QTextEdit, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QProgressBar, QMessageBox, QLineEdit, QShortcut,
-                             QCheckBox)
-from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QColor, QTextCharFormat, QTextDocument
+                             QLabel, QProgressBar, QMessageBox, QLineEdit, QShortcut)
+from PyQt5.QtCore import QThread, pyqtSignal, QObject
+from PyQt5.QtGui import QKeySequence, QColor, QTextCharFormat, QTextDocument, QTextCursor
 
 # --- CACHE DICTIONARY ---
 # Hierin slaan we bekende apparaten op zodat we Windows niet telkens hoeven te pollen.
@@ -105,6 +105,22 @@ def check_windows_power_state(iso_timestamp):
         print(f"Fout bij Windows Power check: {e}")
     
     return "Onbekend"
+
+class EmittingStream(QObject):
+    """Vangt stdout/stderr op en verzendt de tekst via een PyQt signaal."""
+    text_written = pyqtSignal(str)
+
+    def write(self, text):
+        # Strip de witruimte/newlines om te checken of er echt inhoud is
+        cleaned_text = text.strip()
+        
+        # Alleen uitzenden als de tekst niet leeg is
+        if cleaned_text:
+            self.text_written.emit(cleaned_text)
+
+    def flush(self):
+        """Vereist voor compatibiliteit met sys.stdout / sys.stderr."""
+        pass
 
 
 class LogParserWorker(QThread):
@@ -528,6 +544,16 @@ class MainWindow(QMainWindow):
         self.file_path = ""
         # Alle GUI-opbouw gebeurt nu op één centrale plek in initUI!
         self.initUI()
+        # ------------------------------------------------------------------
+        # OMLEIDEN VAN STDOUT EN STDERR NAAR HET TEKSTVENSTER
+        # ------------------------------------------------------------------
+        # Omleiding voor gewone print() meldingen
+        sys.stdout = EmittingStream()
+        sys.stdout.text_written.connect(self.append_to_log)
+
+        # Omleiding voor Exception tracebacks en foute outputs
+        sys.stderr = EmittingStream()
+        sys.stderr.text_written.connect(self.append_to_log_error)
 
     def initUI(self):
         self.setWindowTitle("NINA Log Analyzer")
@@ -616,6 +642,29 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
+
+    def append_to_log(self, text):
+        """Voegt reguliere console print-statements toe aan het tekstvenster."""
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(f"Opgevangen print: {text}\n")
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.ensureCursorVisible()
+
+    def append_to_log_error(self, text):
+        """Voegt uitzonderingen en foutmeldingen toe in het rood."""
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        
+        # Optioneel: Maak uitzonderingen/tracebacks rood voor beter contrast
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor("crimson"))
+        
+        cursor.insertText(f"Opgevangen fout: {text}\n", fmt)
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.ensureCursorVisible()
+
 
     def InitLoupeAxes(self, ax):
         """Maakt een inset-axes aan die dienst doet als de loep-lens."""
@@ -790,7 +839,7 @@ class MainWindow(QMainWindow):
         return text
 
     def ExportToPDF(self):
-        """Exporteert het tekstuele dashboard, de grafiek én een Device Lag tabel naar een Landscape PDF rapport."""
+        """Exporteert het tekstuele dashboard, de grafiek, Device Lag tabel én PowerState events naar een Landscape PDF rapport."""
         if not self.file_path:
             QMessageBox.warning(self, "Waarschuwing", "Er is geen logbestand geladen.")
             return
@@ -890,14 +939,15 @@ class MainWindow(QMainWindow):
             story.append(Paragraph("<b>Opslagtijden Grafiek:</b>", styles['Heading2']))
             story.append(Spacer(1, 5))
 
-            # Afbeelding instellen (hoogte iets aangepast voor ruimte tabel)
             img = RLImage(temp_img_path, width=760, height=240)
             story.append(img)
 
-            # ------------------------------------------------------------------
-            # D. OVERZICHTSTABEL: DEVICE LAGS (Informatie uit de popups)
-            # ------------------------------------------------------------------
+            # Data ophalen voor tabellen
             data = getattr(self, 'current_data', {})
+
+            # ------------------------------------------------------------------
+            # D. OVERZICHTSTABEL: DEVICE LAGS
+            # ------------------------------------------------------------------
             device_lags = data.get('device_lags', [])
 
             if device_lags:
@@ -905,7 +955,6 @@ class MainWindow(QMainWindow):
                 story.append(Paragraph("<b>Gedetecteerde Device Lags (Vertragingen):</b>", styles['Heading3']))
                 story.append(Spacer(1, 4))
 
-                # Tabelkop
                 table_data = [
                     [
                         Paragraph("<b>Tijdstip</b>", cell_style),
@@ -915,14 +964,12 @@ class MainWindow(QMainWindow):
                     ]
                 ]
 
-                # Rijen vullen vanuit de device_lags
                 for lag in device_lags:
                     lag_dt = lag.get('datetime')
                     time_str = lag_dt.strftime("%H:%M:%S") if lag_dt else "Onbekend"
                     device = lag.get('device', 'Onbekend')
                     duration = lag.get('duration', 0.0)
 
-                    # Status bepalen op basis van ernst
                     if duration > 30:
                         status_str = "<font color='crimson'><b>Ernstige vertraging</b></font>"
                     elif duration > 10:
@@ -937,7 +984,6 @@ class MainWindow(QMainWindow):
                         Paragraph(status_str, cell_style)
                     ])
 
-                # ReportLab Tabel aanmaken met nette kolombreedtes (Totaal 760 pt)
                 lag_table = Table(table_data, colWidths=[100, 200, 160, 300])
                 lag_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e9ecef')),
@@ -951,6 +997,64 @@ class MainWindow(QMainWindow):
                 ]))
 
                 story.append(lag_table)
+
+            # ------------------------------------------------------------------
+            # E. OVERZICHTSTABEL: POWER CHANGED EVENTS (Nieuw)
+            # ------------------------------------------------------------------
+            power_events = data.get('power_events', [])
+
+            if power_events:
+                story.append(Spacer(1, 10))
+                story.append(Paragraph("<b>Windows Power State Events (Netstroom / Accu):</b>", styles['Heading3']))
+                story.append(Spacer(1, 4))
+
+                power_table_data = [
+                    [
+                        Paragraph("<b>Tijdstip</b>", cell_style),
+                        Paragraph("<b>Voedingsbron</b>", cell_style),
+                        Paragraph("<b>Status / Melding</b>", cell_style)
+                    ]
+                ]
+
+                for p_event in power_events:
+                    p_dt = p_event.get('Time') or p_event.get('datetime')
+                    if hasattr(p_dt, 'strftime'):
+                        p_time_str = p_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        p_time_str = str(p_dt) if p_dt else "Onbekend"
+
+                    ac_online = p_event.get('AcOnline', None)
+                    
+                    if ac_online is True:
+                        source_str = "<font color='green'><b>Netstroom (AC)</b></font>"
+                        msg_str = "Systeem op externe voeding aangesloten"
+                    elif ac_online is False:
+                        source_str = "<font color='crimson'><b>Accu / Batterij</b></font>"
+                        msg_str = "Systeem overgeschakeld naar accu"
+                    else:
+                        source_str = "Onbekend"
+                        msg_str = str(p_event.get('Message', 'Geen aanvullende details'))
+
+                    power_table_data.append([
+                        Paragraph(p_time_str, cell_style),
+                        Paragraph(source_str, cell_style),
+                        Paragraph(msg_str, cell_style)
+                    ])
+
+                # Tabel aanmaken (Totaal 760 pt breed)
+                power_table = Table(power_table_data, colWidths=[160, 200, 400])
+                power_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e9ecef')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1a2a3a')),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dcdcdc')),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+
+                story.append(power_table)
 
             # 4. Genereer de PDF
             doc.build(story)
@@ -1272,7 +1376,13 @@ class MainWindow(QMainWindow):
                 msg.exec_()
                 break
 
+def custom_excepthook(type, value, tb):
+    """Zorgt dat ongeopvangen exceptions direct in de GUI verschijnen."""
+    error_msg = "".join(traceback.format_exception(type, value, tb))
+    sys.stderr.write(f"\n❌ [ONGEHANDELDE EXCEPTION]\n{error_msg}\n" + "-"*80 + "\n")
+
 if __name__ == "__main__":
+    sys.excepthook = custom_excepthook
     # 1. Controleer of er al een QApplication draait
     app = QApplication.instance()
     
