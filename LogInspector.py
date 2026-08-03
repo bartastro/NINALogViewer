@@ -309,11 +309,11 @@ class LogParserWorker(QThread):
                                         dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
                                         power_events.append({
                                             'datetime': dt,
-                                        'timestamp_str': timestamp_str,
-                                        'status': power_status,
-                                        'is_ac': "AC" in power_status,
-                                        'info': info_str
-                                    })
+                                            'timestamp_str': timestamp_str,
+                                            'status': power_status,
+                                            'is_ac': "AC" in power_status,
+                                            'info': info_str
+                                        })
                                     except Exception:
                                         pass
 
