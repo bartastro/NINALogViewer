@@ -281,28 +281,32 @@ class LogParserWorker(QThread):
                             timestamp_str = match.group(1)
                             system_event = match.group(3)
                             info_str = match.group(4)
+                            power_status = ""
 
                             if "PowerModeChanged" in system_event:
                                 power_status = check_windows_power_state(timestamp_str)
-                                
-                                # 1. Bewaar data voor de grafiek overlay (Matplotlib)
-                                try:
-                                    dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-                                    power_events.append({
-                                        'datetime': dt,
+                                print(f"POWER STATE: {power_status}")
+                                if power_status != "Onbekend" and timestamps:
+                                    # 1. Bewaar data voor de grafiek overlay (Matplotlib)
+                                    # enkel wanneer we gestart zijn met het nemen van foto's
+                                    try:
+                                        dt = datetime.strptime(timestamp_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
+                                        power_events.append({
+                                            'datetime': dt,
                                         'timestamp_str': timestamp_str,
                                         'status': power_status,
                                         'is_ac': "AC" in power_status,
                                         'info': info_str
                                     })
-                                except Exception:
-                                    pass
+                                    except Exception:
+                                        pass
 
                             # 2. Logtekst altijd via ProcessSystemEvent opbouwen (100% uniforme stijl)
                             outputText += self.ProcessSystemEvent(
                                 timestamp=timestamp_str,
                                 systemEvent=system_event,
-                                info=info_str
+                                info=info_str,
+                                power_status=power_status
                             )
 
                     # SCENARIO 4: Device Poll Lag Warnings
@@ -440,12 +444,10 @@ class LogParserWorker(QThread):
             + "-" * 80 + "\n"
         )
 
-    def ProcessSystemEvent(self, timestamp, systemEvent, info) -> str:
+    def ProcessSystemEvent(self, timestamp, systemEvent, info, power_status="") -> str:
         """Verwerk een SystemEvents-regel en geef de opgemaakte tekst terug."""
         
         if "PowerModeChanged" in systemEvent:
-            # Controleer de status via de Windows API helper
-            power_status = check_windows_power_state(timestamp)
             is_ac = "AC" in power_status
             status_text = "AC Netspanning (Hersteld)" if is_ac else "Batterij / Accu (Netspanning weggevallen)"
 
