@@ -57,7 +57,7 @@ def check_windows_power_state(iso_timestamp):
         # Omzetten naar datetime object voor exacte tijdsberekening
         clean_ts_str = iso_timestamp.split('.')[0].replace('T', ' ')
         target_dt = datetime.strptime(clean_ts_str, "%Y-%m-%d %H:%M:%S")
-        print(f"Zoekt naar N.I.N.A. Event time {target_dt}")
+        #print(f"Zoekt naar N.I.N.A. Event time {target_dt}")
 
         # Zoek in Windows log met een strak venster van +- 3 seconden
         ps_script = f"""
@@ -82,7 +82,7 @@ def check_windows_power_state(iso_timestamp):
         
         if res.stdout.strip():
             data = json.loads(res.stdout)
-            print(f'Windows Power state data: {data}')
+            #print(f'Windows Power state data: {data}')
             # Zorg dat we altijd een lijst hebben om doorheen te lussen
             events = [data] if isinstance(data, dict) else data
             
@@ -301,7 +301,7 @@ class LogParserWorker(QThread):
 
                             if "PowerModeChanged" in system_event:
                                 power_status = check_windows_power_state(timestamp_str)
-                                print(f"POWER STATE: {power_status}")
+                                #print(f"POWER STATE: {power_status}")
                                 if power_status != "Onbekend" and timestamps:
                                     # 1. Bewaar data voor de grafiek overlay (Matplotlib)
                                     # enkel wanneer we gestart zijn met het nemen van foto's
@@ -363,6 +363,20 @@ class LogParserWorker(QThread):
                             seconds = float(parts[2])
                             return hours * 3600 + minutes * 60 + seconds
 
+                        average_duration = 0
+                        if len(total_durations) > 1:
+                            average_duration = sum(total_durations) / len(total_durations)
+                            duration = parse_time_duration(groups['total'])
+                            #print(f"debug: {groups['timestamp']} total_durations count: {len(total_durations)}, average duration: {average_duration:.2f}s, duration: {duration:.2f}s")
+                            outputText += self.ProcessImageSave(
+                                timestamp=groups['timestamp'],
+                                total_time=parse_time_duration(groups['total']),
+                                before_save_time=parse_time_duration(groups['before_save']),
+                                before_finalize_time=parse_time_duration(groups['before_finalize']),
+                                finalize_time=parse_time_duration(groups['finalize']),
+                                average_duration=average_duration
+                            )
+
                         timestamps.append(groups['timestamp'])
                         total_durations.append(parse_time_duration(groups['total']))
                         before_save_durations.append(parse_time_duration(groups['before_save']))
@@ -404,7 +418,16 @@ class LogParserWorker(QThread):
             f"📝 Context: {device} Update duurde {total_time}s (limiet: {poll_interval}s)\n"
             f"{'-' * 80}\n"
         )
-        
+
+    def ProcessImageSave(self, timestamp, total_time, before_save_time, before_finalize_time, finalize_time, average_duration) -> str:
+        if total_time > average_duration*4:
+            return (
+            f"[{timestamp}] ⚠️ IMAGE SAVE\n"
+            f"📝 Context: opslagtijd {total_time:.2f}s (gemiddeld: {average_duration:.2f}s) veel hoger dan gemiddeld!\n"
+            f"{'-' * 80}\n"
+        )
+        return ""
+
     def ProcessUSBEvent(self, timestamp, action, usbInfo) -> str:
         """Verwerk een USB-apparaat regel en geef de opgemaakte tekst terug.
         Args:
