@@ -1,6 +1,7 @@
 .env*
 *.zip
 *.exe
+*.code-workspace
 
 dist/*
 build/*
