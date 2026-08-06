@@ -29,7 +29,7 @@ The tool enables astrophotographers to diagnose hardware connection issues, driv
   - Plots all phases of image saving (Total, Before Save, Before Finalize, Finalize).
   - Highlights background zones based on different exposure times.
   - Places vertical interactive indicators for device lags (with hover tooltips) and power transitions (with click-to-open warning/info modals).
-- **Embedded Console & Search**: Captures standard output (`stdout`) and standard error (`stderr`) to display errors in crimson. Includes a built-in search bar (activated via `Ctrl+F`) supporting forward/backward match navigation, wrap-around, and bright yellow highlight selections.
+- **Embedded Console & Search**: Captures standard output (`stdout`) and standard error (`stderr`) to display errors using a dedicated color scheme for easy identification. Also included is a built-in search bar (activated via `Ctrl+F`) supporting forward/backward match navigation, wrap-around, and bright yellow highlight selections.
 - **Landscape PDF Export**: Compiles an A4 Landscape PDF containing a clean text dashboard, the analysis plot, a table of device lags, and a table of power state transitions.
 
 ---
