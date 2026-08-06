@@ -122,10 +122,43 @@ Overrides safeguards for manual verification and testing:
 
 ## 6. Deployment with Windows Task Scheduler
 
-To monitor N.I.N.A. continuously during imaging sessions, configure a Windows Task Scheduler task with the following properties:
+To monitor N.I.N.A. saving times and device lag automatically during imaging sessions, the monitoring task is configured in Windows Task Scheduler as a repeating task starting at user logon. Below are the verified configurations from the scheduled task `NINA_SaveTime_Monitor`:
 
-1. **Trigger**: Run daily, repeating every **1 minute** indefinitely.
-2. **Action**: Start a Program.
-   - **Program/Script**: `powershell.exe`
-   - **Arguments**: `-NoProfile -WindowStyle Hidden -File "C:\Path\To\CrashMonitoring\NinaLogMonitor.ps1"`
-3. **Conditions**: Uncheck "Start the task only if the computer is on AC power" if you operate on mobile battery power in the field.
+### Task Metadata
+* **Task Name**: `NINA_SaveTime_Monitor`
+* **Path**: `\` (Root Folder)
+* **Status**: `Disabled` (Current state in export, enable to activate)
+* **Execution Privileges**: Run with standard user privileges (`Limited`)
+* **Security Context**: Executed under user account `barta`
+
+### Trigger (Logon & Repetition Trigger)
+Instead of starting at a set time of day, the task initiates when the user logs into their account and repeats indefinitely:
+- **Trigger Type**: Logon Trigger (`MSFT_TaskLogonTrigger`)
+- **Trigger Condition**: Enabled (`True`), runs on user logon.
+- **Repetition settings**:
+  - **Interval**: `PT1M` (Every 1 minute)
+  - **Duration**: `P1D` (Repeated for 1 day, running indefinitely across logons)
+  - **Stop at duration end**: `False`
+
+### Action (Start a Program)
+- **Program/Script**: `powershell.exe`
+- **Arguments**: 
+  ```text
+  -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\NinaLogMonitor.ps1"
+  ```
+- **Execution Advantage**: Runs periodically in the background as a standard execution process (Limited privileges), checking for new save-time anomalies or device update lags without requiring administrative access.
+
+---
+
+## 7. Desktop Shortcuts (Control)
+
+To easily enable and disable the monitor without opening the Windows Task Scheduler GUI, two desktop shortcuts are provided:
+
+* **`StartLogMonitoring`**:
+  * **Function**: Enables the `NINA_SaveTime_Monitor` scheduled task so that it starts running periodically.
+  * **Underlying Command**: Calls `schtasks.exe /change /tn "NINA_SaveTime_Monitor" /enable` (equivalent to running the [enableMonitor.ps1](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/enableMonitor.ps1) script).
+* **`StopLogMonitoring`**:
+  * **Function**: Disables the `NINA_SaveTime_Monitor` scheduled task, pausing all automated N.I.N.A. log monitoring.
+  * **Underlying Command**: Calls `schtasks.exe /change /tn "NINA_SaveTime_Monitor" /disable` to stop the periodic task cycle.
+
+

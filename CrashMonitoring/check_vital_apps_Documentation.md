@@ -101,10 +101,31 @@ The script supports a `-TestMode` switch parameter to simplify local configurati
 
 ## 7. Deployment with Windows Task Scheduler
 
-To maintain continuous system monitoring, schedule this script to run under the Windows Task Scheduler:
+Rather than polling at a set interval, the monitoring system is configured as an **event-driven (push-based) task** that runs instantly when Windows logs an application error. Below are the verified configurations from the scheduled task `Astro APP monitoring`:
 
-1. **Trigger**: Run daily, repeating every **1 minute** indefinitely.
-2. **Action**: Start a Program.
-   - **Program/Script**: `powershell.exe`
-   - **Arguments**: `-NoProfile -WindowStyle Hidden -File "C:\Path\To\CrashMonitoring\check_vital_apps.ps1"`
-3. **Conditions**: Uncheck "Start the task only if the computer is on AC power" to ensure it remains active when the system runs on battery power in the field.
+### Task Metadata
+* **Task Name**: `Astro APP monitoring`
+* **Path**: `\` (Root Folder)
+* **Execution Privileges**: Run with highest privileges (`Highest`)
+* **Security Context**: Executed under user account `barta`
+
+### Trigger (Event Log Subscription)
+The task triggers automatically when Event Viewer logs a crash matching **Event ID 1000** (Application Error) with **Level 2** (Error) in the Application channel.
+- **Log Name**: `Application`
+- **XML Query Filter**:
+  ```xml
+  <QueryList>
+      <Query Id="0" Path="Application">
+          <Select Path="Application">*[System[(EventID=1000) and (Level=2)]]</Select>
+      </Query>
+  </QueryList>
+  ```
+
+### Action (Start a Program)
+- **Program/Script**: `powershell.exe`
+- **Arguments**: 
+  ```text
+  -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\check_vital_apps.ps1"
+  ```
+- **Execution Advantage**: By coupling the Event Log trigger with `-ExecutionPolicy Bypass`, the script executes instantaneously when an application crashes, providing real-time Discord notifications without CPU polling overhead.
+
