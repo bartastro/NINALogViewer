@@ -61,16 +61,16 @@ This monitoring toolkit addresses those challenges through a dual-layer approach
 
 | Script | Primary Function | Trigger Mechanism | Target / Source | Config / Webhook File |
 | :--- | :--- | :--- | :--- | :--- |
-| [`NinaLogMonitor.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/NinaLogMonitor.ps1) | Detects slow image writes (>25s) and hardware driver poll lags | Scheduled Task (repeats every 1 min) or Manual | Latest N.I.N.A. log file | [`.env-nina-groundstation`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-nina-groundstation) |
-| [`check_vital_apps.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/check_vital_apps.ps1) | Detects crashes across the entire imaging stack (NINA, PHD2, Pegasus Unity) | Event-Driven (Windows Event ID 1000) | Windows Application Event Log | [`.env-astrocrash`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-astrocrash) |
-| [`Send-RebootEventToDiscord.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/Send-RebootEventToDiscord.ps1) | Intercepts reboot or shutdown commands and warns operator | Event-Driven (Windows Event ID 1074) | Windows System Event Log (`User32`) | [`.env-astrocrash`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-astrocrash) |
+| [`NinaLogMonitor.ps1`](./NinaLogMonitor.ps1) | Detects slow image writes (>25s) and hardware driver poll lags | Scheduled Task (repeats every 1 min) or Manual | Latest N.I.N.A. log file | [`.env-nina-groundstation`](./.env-nina-groundstation) |
+| [`check_vital_apps.ps1`](./check_vital_apps.ps1) | Detects crashes across the entire imaging stack (NINA, PHD2, Pegasus Unity) | Event-Driven (Windows Event ID 1000) | Windows Application Event Log | [`.env-astrocrash`](./.env-astrocrash) |
+| [`Send-RebootEventToDiscord.ps1`](./Send-RebootEventToDiscord.ps1) | Intercepts reboot or shutdown commands and warns operator | Event-Driven (Windows Event ID 1074) | Windows System Event Log (`User32`) | [`.env-astrocrash`](./.env-astrocrash) |
 
 ---
 
 ## 3. Script Details & Functionality
 
 ### `NinaLogMonitor.ps1`
-* **Full Documentation**: [NinaLogMonitor_Documentation.md](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/NinaLogMonitor_Documentation.md)
+* **Full Documentation**: [NinaLogMonitor_Documentation.md](./NinaLogMonitor_Documentation.md)
 * **Purpose**: Inspects the active N.I.N.A. session log for performance degradation and driver latency.
 * **Key Functionality**:
   - **Lock-Free Reading**: Opens the currently writing log file via .NET `[System.IO.File]::Open` using `FileMode.Open`, `FileAccess.Read`, and `FileShare.ReadWrite`. This ensures zero locking conflicts with N.I.N.A.
@@ -86,13 +86,13 @@ This monitoring toolkit addresses those challenges through a dual-layer approach
   .\NinaLogMonitor.ps1 -TestMode
 
   # Target a specific log file
-  .\NinaLogMonitor.ps1 -LogFilePath "C:\Users\barta\AppData\Local\NINA\Logs\20260920-010203.log"
+  .\NinaLogMonitor.ps1 -LogFilePath "$env:LOCALAPPDATA\NINA\Logs\20260920-010203.log"
   ```
 
 ---
 
 ### `check_vital_apps.ps1`
-* **Full Documentation**: [check_vital_apps_Documentation.md](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/check_vital_apps_Documentation.md)
+* **Full Documentation**: [check_vital_apps_Documentation.md](./check_vital_apps_Documentation.md)
 * **Purpose**: Multi-application crash sentry for the core astrophotography suite.
 * **Monitored Applications**:
   - **N.I.N.A.** (`*NINA.exe*`): Sequencing and camera acquisition.
@@ -134,8 +134,8 @@ The scripts use dedicated `.env` configuration files to keep Discord webhook URL
 
 | Config File | Used By | Intended Discord Target |
 | :--- | :--- | :--- |
-| [`.env-astrocrash`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-astrocrash) | `check_vital_apps.ps1`, `Send-RebootEventToDiscord.ps1`, `check_nina_crash.ps1` | Critical alerts channel (app crashes, unexpected reboots) |
-| [`.env-nina-groundstation`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-nina-groundstation) | `NinaLogMonitor.ps1` | Operational telemetry channel (slow image saves, driver lag warnings) |
+| [`.env-astrocrash`](./.env-astrocrash) | `check_vital_apps.ps1`, `Send-RebootEventToDiscord.ps1`, `check_nina_crash.ps1` | Critical alerts channel (app crashes, unexpected reboots) |
+| [`.env-nina-groundstation`](./.env-nina-groundstation) | `NinaLogMonitor.ps1` | Operational telemetry channel (slow image saves, driver lag warnings) |
 
 ### Environment File Syntax
 Each file follows standard `KEY=VALUE` formatting:
@@ -161,7 +161,7 @@ The monitoring suite is designed for automated deployment through two scheduled 
   - **Program**: `powershell.exe`
   - **Arguments**:
     ```text
-    -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\check_vital_apps.ps1"
+    -NoProfile -ExecutionPolicy Bypass -File "C:\<PathToScripts>\check_vital_apps.ps1"
     ```
 * **Privilege Level**: Run with highest privileges (`Highest`) under the user account.
 
@@ -173,7 +173,7 @@ The monitoring suite is designed for automated deployment through two scheduled 
   - **Program**: `powershell.exe`
   - **Arguments**:
     ```text
-    -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\NinaLogMonitor.ps1"
+    -NoProfile -ExecutionPolicy Bypass -File "C:\<PathToScripts>\NinaLogMonitor.ps1"
     ```
 * **Privilege Level**: Run with standard user privileges (`Limited`).
 
@@ -199,6 +199,6 @@ To verify Discord integration without having to wait for a crash or slow frame:
 
 ## 7. Reference Documentation & Assets
 
-- [NinaLogMonitor_Documentation.md](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/NinaLogMonitor_Documentation.md) – Detailed regex patterns, duration formulas, and setup steps for log monitoring.
-- [check_vital_apps_Documentation.md](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/check_vital_apps_Documentation.md) – Event log XML filters, app definitions, and Discord payload schemas.
-- [AppMonitoring.pdf](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/AppMonitoring.pdf) / [AppMonitoring.docx](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/AppMonitoring.docx) – Comprehensive setup guide and operational handbook.
+- [NinaLogMonitor_Documentation.md](./NinaLogMonitor_Documentation.md) - Detailed regex patterns, duration formulas, and setup steps for log monitoring.
+- [check_vital_apps_Documentation.md](./check_vital_apps_Documentation.md) - Event log XML filters, app definitions, and Discord payload schemas.
+- [AppMonitoring.pdf](./AppMonitoring.pdf) / [AppMonitoring.docx](./AppMonitoring.docx) - Comprehensive setup guide and operational handbook.

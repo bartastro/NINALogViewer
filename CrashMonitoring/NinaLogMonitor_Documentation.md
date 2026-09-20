@@ -129,7 +129,7 @@ To monitor N.I.N.A. saving times and device lag automatically during imaging ses
 * **Path**: `\` (Root Folder)
 * **Status**: `Disabled` (Current state in export, enable to activate)
 * **Execution Privileges**: Run with standard user privileges (`Limited`)
-* **Security Context**: Executed under user account `barta`
+* **Security Context**: Executed under local user account
 
 ### Trigger (Logon & Repetition Trigger)
 Instead of starting at a set time of day, the task initiates when the user logs into their account and repeats indefinitely:
@@ -144,7 +144,7 @@ Instead of starting at a set time of day, the task initiates when the user logs 
 - **Program/Script**: `powershell.exe`
 - **Arguments**: 
   ```text
-  -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\NinaLogMonitor.ps1"
+  -NoProfile -ExecutionPolicy Bypass -File "C:\<PathToScripts>\NinaLogMonitor.ps1"
   ```
 - **Execution Advantage**: Runs periodically in the background as a standard execution process (Limited privileges), checking for new save-time anomalies or device update lags without requiring administrative access.
 
@@ -156,7 +156,7 @@ To easily enable and disable the monitor without opening the Windows Task Schedu
 
 * **`StartLogMonitoring`**:
   * **Function**: Enables the `NINA_SaveTime_Monitor` scheduled task so that it starts running periodically.
-  * **Underlying Command**: Calls `schtasks.exe /change /tn "NINA_SaveTime_Monitor" /enable` (equivalent to running the [enableMonitor.ps1](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/enableMonitor.ps1) script).
+  * **Underlying Command**: Calls `schtasks.exe /change /tn "NINA_SaveTime_Monitor" /enable` (equivalent to running the [enableMonitor.ps1](./enableMonitor.ps1) script).
 * **`StopLogMonitoring`**:
   * **Function**: Disables the `NINA_SaveTime_Monitor` scheduled task, pausing all automated N.I.N.A. log monitoring.
   * **Underlying Command**: Calls `schtasks.exe /change /tn "NINA_SaveTime_Monitor" /disable` to stop the periodic task cycle.

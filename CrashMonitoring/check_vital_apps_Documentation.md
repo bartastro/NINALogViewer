@@ -107,7 +107,7 @@ Rather than polling at a set interval, the monitoring system is configured as an
 * **Task Name**: `Astro APP monitoring`
 * **Path**: `\` (Root Folder)
 * **Execution Privileges**: Run with highest privileges (`Highest`)
-* **Security Context**: Executed under user account `barta`
+* **Security Context**: Executed under local user account
 
 ### Trigger (Event Log Subscription)
 The task triggers automatically when Event Viewer logs a crash matching **Event ID 1000** (Application Error) with **Level 2** (Error) in the Application channel.
@@ -125,7 +125,7 @@ The task triggers automatically when Event Viewer logs a crash matching **Event 
 - **Program/Script**: `powershell.exe`
 - **Arguments**: 
   ```text
-  -NoProfile -ExecutionPolicy Bypass -File "C:\Users\barta\Documents\Python\Astro tools\NINAlog\CrashMonitoring\check_vital_apps.ps1"
+  -NoProfile -ExecutionPolicy Bypass -File "C:\<PathToScripts>\check_vital_apps.ps1"
   ```
 - **Execution Advantage**: By coupling the Event Log trigger with `-ExecutionPolicy Bypass`, the script executes instantaneously when an application crashes, providing real-time Discord notifications without CPU polling overhead.
 
