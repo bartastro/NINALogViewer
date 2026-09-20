@@ -61,9 +61,9 @@ This monitoring toolkit addresses those challenges through a dual-layer approach
 
 | Script | Primary Function | Trigger Mechanism | Target / Source | Config / Webhook File |
 | :--- | :--- | :--- | :--- | :--- |
-| [`NinaLogMonitor.ps1`](./NinaLogMonitor.ps1) | Detects slow image writes (>25s) and hardware driver poll lags | Scheduled Task (repeats every 1 min) or Manual | Latest N.I.N.A. log file | [`.env-nina-groundstation`](./.env-nina-groundstation) |
-| [`check_vital_apps.ps1`](./check_vital_apps.ps1) | Detects crashes across the entire imaging stack (NINA, PHD2, Pegasus Unity) | Event-Driven (Windows Event ID 1000) | Windows Application Event Log | [`.env-astrocrash`](./.env-astrocrash) |
-| [`Send-RebootEventToDiscord.ps1`](./Send-RebootEventToDiscord.ps1) | Intercepts reboot or shutdown commands and warns operator | Event-Driven (Windows Event ID 1074) | Windows System Event Log (`User32`) | [`.env-astrocrash`](./.env-astrocrash) |
+| [`NinaLogMonitor.ps1`](./NinaLogMonitor.ps1) | Detects slow image writes (>25s) and hardware driver poll lags | Scheduled Task (repeats every 1 min) or Manual | Latest N.I.N.A. log file | `./.env-nina-groundstation` |
+| [`check_vital_apps.ps1`](./check_vital_apps.ps1) | Detects crashes across the entire imaging stack (NINA, PHD2, Pegasus Unity) | Event-Driven (Windows Event ID 1000) | Windows Application Event Log | `./.env-astrocrash` |
+| [`Send-RebootEventToDiscord.ps1`](./Send-RebootEventToDiscord.ps1) | Intercepts reboot or shutdown commands and warns operator | Event-Driven (Windows Event ID 1074) | Windows System Event Log (`User32`) | `./.env-astrocrash` |
 
 ---
 
