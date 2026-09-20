@@ -1,1 +1,0 @@
-schtasks.exe /change /tn "NINA_SaveTime_Monitor" /enable

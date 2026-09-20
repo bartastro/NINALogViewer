@@ -64,7 +64,6 @@ This monitoring toolkit addresses those challenges through a dual-layer approach
 | [`NinaLogMonitor.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/NinaLogMonitor.ps1) | Detects slow image writes (>25s) and hardware driver poll lags | Scheduled Task (repeats every 1 min) or Manual | Latest N.I.N.A. log file | [`.env-nina-groundstation`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-nina-groundstation) |
 | [`check_vital_apps.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/check_vital_apps.ps1) | Detects crashes across the entire imaging stack (NINA, PHD2, Pegasus Unity) | Event-Driven (Windows Event ID 1000) | Windows Application Event Log | [`.env-astrocrash`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-astrocrash) |
 | [`Send-RebootEventToDiscord.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/Send-RebootEventToDiscord.ps1) | Intercepts reboot or shutdown commands and warns operator | Event-Driven (Windows Event ID 1074) | Windows System Event Log (`User32`) | [`.env-astrocrash`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/.env-astrocrash) |
-| [`enableMonitor.ps1`](file:///c:/Users/barta/Documents/Python/Astro%20tools/NINAlog/CrashMonitoring/enableMonitor.ps1) | Helper utility to enable the `NINA_SaveTime_Monitor` scheduled task | Manual / Desktop Shortcut execution | Windows Task Scheduler (`schtasks.exe`) | N/A |
 
 ---
 
@@ -126,15 +125,6 @@ This monitoring toolkit addresses those challenges through a dual-layer approach
   ```powershell
   .\Send-RebootEventToDiscord.ps1
   ```
-
----
-
-### `enableMonitor.ps1`
-* **Purpose**: One-line automation script to enable the `NINA_SaveTime_Monitor` scheduled task:
-  ```powershell
-  schtasks.exe /change /tn "NINA_SaveTime_Monitor" /enable
-  ```
-* **Usage**: Linked to desktop quick-actions (`StartLogMonitoring` / `StopLogMonitoring`) to allow turning background monitoring on or off without opening the Task Scheduler management console.
 
 ---
 
