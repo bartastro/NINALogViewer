@@ -26,7 +26,7 @@ When running automated imaging sessions overnight, software failures, hardware d
 
 This monitoring toolkit addresses those challenges through a dual-layer approach:
 1. **Event-Driven Push Monitoring**: Listens to Windows Event Viewer channels (Application and System logs) and triggers instantly when critical errors (Event ID 1000) or system reboot requests (Event ID 1074) occur.
-2. **Active Telemetry Polling**: Safely reads active N.I.N.A. log files in non-blocking mode (`FileShare.ReadWrite`) to intercept operational warnings - such as ASCOM driver poll overruns and slow FITS/XISF image saves - before complete system hangs occur.
+2. **Active Telemetry Polling**: Safely reads active N.I.N.A. log files in non-blocking mode (`FileShare.ReadWrite`) to intercept operational warnings - such as ASCOM driver poll overruns and slow FITS image saves - before complete system hangs occur.
 
 ```
 +-----------------------------------------------------------------------------------+
