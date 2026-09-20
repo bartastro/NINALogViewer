@@ -1,10 +1,29 @@
+# Omgevingsvariabelen (Geheimen & API keys)
 .env*
+!.env.example
+
+# Exe / Build / Distributie
 *.zip
 *.exe
-*.code-workspace
-
+*.spec
 dist/*
 build/*
-*.spec
 
-!.env.example
+# IDE & Editor instellingen
+*.code-workspace
+.vscode/
+.idea/
+
+# Python Bytecode & Cache (Voorkomt dat __pycache__ in Git belandt)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtuele omgevingen (Venv)
+venv/
+.venv/
+env/
+
+# OS specifieke bestanden
+Thumbs.db
+.DS_Store
